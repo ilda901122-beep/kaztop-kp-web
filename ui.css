@@ -78,6 +78,7 @@ button { font: inherit; cursor: pointer; }
 /* История */
 .h-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .h-head h1 { margin: 0; }
+.h-tools { display: flex; gap: 6px; }
 .small-btn { border: 1px solid rgba(14,28,33,0.18); background: #fff; border-radius: 9px; padding: 7px 12px; font-size: 14px; font-weight: 700; }
 .search { width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid rgba(14,28,33,0.18); border-radius: 10px; background: #fbfcfc; margin: 4px 0 4px; }
 .h-list { display: grid; gap: 10px; margin-top: 6px; }

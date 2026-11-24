@@ -1,6 +1,6 @@
 /* Интерфейс веб-версии: пароль и расшифровка данных, форма, предпросмотр, PDF в браузере (html2canvas + jsPDF),
-   общая история выгрузок (Google Apps Script: PDF на Диске, строка в таблице) или история этого устройства,
-   ред. КП с перечнем изменений и статусы «согласовано» / «отправлено клиенту». */
+   общая история выгрузок (history.js: релей ntfy.sh + архив в ветке history) или история этого устройства,
+   ред. КП с перечнем изменений, статусы «согласовано» / «отправлено клиенту», выгрузка таблицы. */
 (function () {
   'use strict';
   var $ = function (s) { return document.querySelector(s); };
@@ -8,10 +8,11 @@
     data: null, ctx: null, kp: null, pdf: null, pdfUrl: null, busy: false,
     editing: null,   // запись КП, которую меняем: следующая сборка станет её новой ред.
     saved: null,     // запись последнего сохранённого PDF
-    draftUid: null, history: [], sheetUrl: null, suggested: null,
+    draftUid: null, history: [], files: {}, suggested: null, cfg: undefined,
   };
   var PW_KEY = 'kp_web_password', LOCAL_KEY = 'kp_history_local', LOCAL_LIMIT = 60;
-  var SCALE_PHONE = 3, SCALE_A4 = 2, JPEG_Q = 0.86;
+  // Растр страниц: от чёткого к лёгкому, пока PDF не станет меньше 2 МБ (лимит файла в релее общей истории)
+  var PDF_PRESETS = [[3, 2, 0.86], [2.5, 1.8, 0.8], [2, 1.6, 0.74]], PDF_LIMIT = 2000000;
   var SCREENS = ['lock', 'form', 'result', 'history'];
   var STATUS_NEXT = { 'создано': ['согласовано'], 'согласовано': ['отправлено клиенту'] };
 
@@ -54,33 +55,13 @@
   }
 
   // ---------- история: сервер или это устройство ----------
-  function historyApi() { var h = state.data && state.data.history; return h && h.url && h.token ? h : null; }
+  function historyCfg() {
+    if (state.cfg === undefined) state.cfg = state.data && window.KPH ? KPH.config(state.data.history) : null;
+    return state.cfg;
+  }
   function newUid() {
     var a = new Uint8Array(12); crypto.getRandomValues(a);
     return Array.prototype.map.call(a, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
-  }
-  async function call(action, payload, timeoutMs) {
-    var h = historyApi();
-    var ms = timeoutMs || 60000;
-    var ctrl = new AbortController(); var timer = setTimeout(function () { ctrl.abort(); }, ms);
-    try {
-      // тело text/plain без своих заголовков: простой запрос без предварительного OPTIONS, как требует Apps Script
-      var res = await fetch(h.url, { method: 'POST', body: JSON.stringify(Object.assign({ token: h.token, action: action }, payload || {})), signal: ctrl.signal, redirect: 'follow' });
-      if (!res.ok) throw new Error('сервер истории ответил ' + res.status);
-      var text = await res.text();
-      try { return JSON.parse(text); } catch (e) { throw new Error('сервер истории ответил не данными: у развёртывания должен быть доступ «Все»'); }
-    } catch (e) {
-      if (e.name === 'AbortError') throw new Error('сервер истории не ответил за ' + Math.round(ms / 1000) + ' с');
-      if (e instanceof TypeError) throw new Error('нет связи с сервером истории (интернет или доступ развёртывания «Все»)');
-      throw e;
-    } finally { clearTimeout(timer); }
-  }
-  function errorText(out) {
-    var map = { auth: 'ключ истории не подходит, страницу нужно пересобрать', bad_json: 'сервер не понял запрос', too_big: 'PDF слишком большой', not_pdf: 'файл не PDF',
-      not_found: 'запись не найдена', bad_status: 'недопустимый статус', unknown_action: 'сервер истории устарел' };
-    if (out.error === 'bad_record') return 'ошибка в данных КП' + (out.message ? ' (' + out.message + ')' : '');
-    if (out.error === 'server') return 'ошибка сервера истории' + (out.message ? ': ' + out.message : '');
-    return map[out.error] || ('сервер истории: ' + (out.error || 'пустой ответ'));
   }
   function localHistory() { try { return JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]'); } catch (e) { return []; } }
   function pushLocal(rec) {
@@ -89,12 +70,19 @@
     localStorage.setItem(LOCAL_KEY, JSON.stringify(list.slice(0, LOCAL_LIMIT)));
   }
   async function loadHistory() {
-    if (!historyApi()) { state.history = localHistory(); return state.history; }
-    var out = await call('list', {}, 30000);
-    if (!out.ok) throw new Error(errorText(out));
-    state.history = out.records.filter(function (r) { return r.status !== 'тест'; });
-    state.sheetUrl = out.sheet_url || null;
+    var cfg = historyCfg();
+    if (!cfg) { state.history = localHistory(); return state.history; }
+    var out = await KPH.load(cfg);
+    state.history = out.records.filter(function (r) { return !r.test; });
+    state.files = out.files;
     return state.history;
+  }
+  function pdfLink(r) { var cfg = historyCfg(); return cfg && r && r.pdf ? KPH.viewerUrl(cfg, r.pdf, location.href) : ''; }
+  function timeOf(r) { return r.time ? Number(r.time) : (Date.parse(r.created_at || '') / 1000 || 0); }
+  var WHEN_FMT = (function () { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return null; } })();
+  function whenOf(r) {
+    if (r.time && WHEN_FMT) return WHEN_FMT.format(new Date(r.time * 1000)).replace(',', '');
+    return fmtWhen(r.created_at);
   }
   function latestRevision(uid) {
     var max = 0;
@@ -304,9 +292,9 @@
   }
 
   // ---------- PDF ----------
-  async function rasterize(el, scale) {
+  async function rasterize(el, scale, quality) {
     var canvas = await html2canvas(el, { scale: scale, backgroundColor: '#ffffff', logging: false, useCORS: true, imageTimeout: 15000, width: el.offsetWidth, height: el.offsetHeight, scrollX: 0, scrollY: -window.scrollY });
-    return canvas.toDataURL('image/jpeg', JPEG_Q);
+    return canvas.toDataURL('image/jpeg', quality);
   }
   function addLinks(doc, el, w, h) {
     var base = el.getBoundingClientRect(); var kx = w / base.width, ky = h / base.height;
@@ -314,6 +302,23 @@
       var r = a.getBoundingClientRect();
       doc.link((r.left - base.left) * kx, (r.top - base.top) * ky, r.width * kx, r.height * ky, { url: a.getAttribute('href') });
     });
+  }
+  async function renderPdf(wrap, preset) {
+    var jsPDF = window.jspdf.jsPDF;
+    var doc = new jsPDF({ unit: 'px', format: [390, 693], orientation: 'portrait', hotfixes: ['px_scaling'], compress: true });
+    var pages = Array.prototype.slice.call(wrap.querySelectorAll('.page'));
+    for (var i = 0; i < pages.length; i++) {
+      status('Собираю страницу ' + (i + 1) + ' из ' + (pages.length + 1) + '…');
+      if (i > 0) doc.addPage([390, 693], 'portrait');
+      doc.addImage(await rasterize(pages[i], preset[0], preset[2]), 'JPEG', 0, 0, 390, 693, undefined, 'FAST');
+      addLinks(doc, pages[i], 390, 693);
+    }
+    status('Собираю страницу ' + (pages.length + 1) + ' из ' + (pages.length + 1) + '…');
+    var a4img = await rasterize($('#a4 .a4'), preset[1], preset[2]);
+    doc.addPage('a4', 'portrait');
+    doc.addImage(a4img, 'JPEG', 0, 0, doc.internal.pageSize.getWidth(), doc.internal.pageSize.getHeight(), undefined, 'FAST');
+    doc.setProperties({ title: state.kp.number + (state.kp.revision > 1 ? ' ред. ' + state.kp.revision : '') + ' · ' + state.data.company.legal_name, subject: 'Коммерческое предложение', creator: 'kaztop-kp web' });
+    return { blob: doc.output('blob'), pages: pages.length + 1 };
   }
   async function makePdf() {
     if (state.pdf) return state.pdf;
@@ -323,27 +328,15 @@
     wrap.style.transform = 'none'; wrap.style.height = '';
     try {
       if (document.fonts && document.fonts.ready) await document.fonts.ready;
-      var jsPDF = window.jspdf.jsPDF;
-      var doc = new jsPDF({ unit: 'px', format: [390, 693], orientation: 'portrait', hotfixes: ['px_scaling'], compress: true });
-      var pages = Array.prototype.slice.call(wrap.querySelectorAll('.page'));
-      for (var i = 0; i < pages.length; i++) {
-        status('Собираю страницу ' + (i + 1) + ' из ' + (pages.length + 1) + '…');
-        if (i > 0) doc.addPage([390, 693], 'portrait');
-        var img = await rasterize(pages[i], SCALE_PHONE);
-        doc.addImage(img, 'JPEG', 0, 0, 390, 693, undefined, 'FAST');
-        addLinks(doc, pages[i], 390, 693);
+      var limit = window.__kpPdfLimit || PDF_LIMIT, out, preset = 0;
+      for (; preset < PDF_PRESETS.length; preset++) {
+        out = await renderPdf(wrap, PDF_PRESETS[preset]);
+        if (out.blob.size <= limit) break;
       }
-      status('Собираю страницу ' + (pages.length + 1) + ' из ' + (pages.length + 1) + '…');
-      var a4img = await rasterize($('#a4 .a4'), SCALE_A4);
-      doc.addPage('a4', 'portrait');
-      var pw = doc.internal.pageSize.getWidth(), ph = doc.internal.pageSize.getHeight();
-      doc.addImage(a4img, 'JPEG', 0, 0, pw, ph, undefined, 'FAST');
-      doc.setProperties({ title: state.kp.number + (state.kp.revision > 1 ? ' ред. ' + state.kp.revision : '') + ' · ' + state.data.company.legal_name, subject: 'Коммерческое предложение', creator: 'kaztop-kp web' });
-      var blob = doc.output('blob');
       var name = state.kp.number + (state.kp.revision > 1 ? '-ред' + state.kp.revision : '') + '.pdf';
-      state.pdf = new File([blob], name, { type: 'application/pdf' });
-      status('PDF готов: ' + (pages.length + 1) + ' стр., ' + Math.round(blob.size / 1024) + ' КБ.', 'ok');
-      window.__lastPdfSize = blob.size;
+      state.pdf = new File([out.blob], name, { type: 'application/pdf' });
+      status('PDF готов: ' + out.pages + ' стр., ' + Math.round(out.blob.size / 1024) + ' КБ.', 'ok');
+      window.__lastPdf = { size: out.blob.size, preset: Math.min(preset, PDF_PRESETS.length - 1) };
       return state.pdf;
     } finally {
       wrap.style.transform = savedTransform; wrap.style.height = savedHeight;
@@ -421,37 +414,54 @@
     bumpNumber(rec.number);
     updateFormMode();
   }
-  async function saveToHistory() {
-    var rec = buildRecord();
-    if (!historyApi()) {
-      rec.created_at = nowIso(); rec.status = 'создано'; rec.pdf_url = '';
-      pushLocal(rec);
-      afterSaved(rec);
-      status('PDF готов. Общая история не подключена: запись сохранена только на этом устройстве.', 'warn');
-      return rec;
+  function nextFree(number) {
+    var m = /^KP-(\d{6})-(\d+)$/.exec(number);
+    var n = parseInt(localStorage.getItem('kp_counter_' + m[1]) || '0', 10);
+    state.history.forEach(function (r) { var x = /^KP-(\d{6})-(\d+)$/.exec(r.number || ''); if (x && x[1] === m[1]) n = Math.max(n, parseInt(x[2], 10)); });
+    return 'KP-' + m[1] + '-' + String(Math.max(n, parseInt(m[2], 10)) + 1).padStart(2, '0');
+  }
+  /** Номер занят другим КП или ред. уже есть: правим перед отправкой (PDF пересобирается). */
+  function resolveConflicts() {
+    var k = state.kp, changed = false;
+    if (state.history.some(function (r) { return r.number === k.number && r.uid !== k.uid; })) {
+      k.number = nextFree(k.number); changed = true;
+      if (!state.editing) $('#f-number').value = k.number;
     }
-    status('Сохраняю PDF в общую историю…');
+    var latest = latestRevision(k.uid);
+    if (k.revision <= latest) { k.revision = latest + 1; changed = true; }
+    return changed;
+  }
+  async function saveToHistory() {
+    var cfg = historyCfg();
+    if (!cfg) {
+      var local = buildRecord();
+      local.created_at = nowIso(); local.status = 'создано';
+      pushLocal(local);
+      afterSaved(local);
+      status('PDF готов. Общая история не подключена: запись сохранена только на этом устройстве.', 'warn');
+      return local;
+    }
     try {
-      for (var attempt = 0; attempt < 3; attempt++) {
-        var out = await call('save', { record: rec, pdf_b64: await fileToB64(state.pdf) }, 120000);
-        if (out.ok) {
-          pushLocal(out.record);
-          afterSaved(out.record);
-          showLink(out.record.pdf_url);
-          $('#b-retry').hidden = true;
-          if (out.warning) status('PDF сохранён в истории, но ' + out.warning, 'warn');
-          else status('PDF сохранён в истории: ссылку можно отправить руководителю, она откроется и без пароля.', 'ok');
-          return out.record;
-        }
-        if (out.error !== 'conflict') throw new Error(errorText(out));
-        if (out.number) { state.kp.number = out.number; if (!state.editing) $('#f-number').value = out.number; }
-        if (out.revision) state.kp.revision = out.revision;
+      status('Сверяю номер с общей историей…');
+      try { await loadHistory(); } catch (e) { /* нет свежей истории: проверка по тому, что уже загружено */ }
+      if (resolveConflicts()) {
         status('Номер или ред. уже заняты, собираю PDF заново как ' + state.kp.number + (state.kp.revision > 1 ? ' ред. ' + state.kp.revision : '') + '…', 'warn');
         render();
         readyPdf(await makePdf());
-        rec = buildRecord();
       }
-      throw new Error('номер занят несколько раз подряд, откройте историю и попробуйте снова');
+      status('Отправляю PDF в общую историю…');
+      var pdf = await KPH.publishPdf(cfg, state.pdf);
+      var rec = buildRecord();
+      rec.pdf = pdf;
+      status('Сохраняю запись…');
+      var res = await KPH.publish(cfg, { t: 'kp', rec: rec });
+      rec.msg = res.id; rec.time = res.time; rec.status = 'создано';
+      pushLocal(rec);
+      afterSaved(rec);
+      showLink(pdfLink(rec));
+      $('#b-retry').hidden = true;
+      status('PDF сохранён в общей истории: ссылку можно отправить руководителю, она откроется без пароля.', 'ok');
+      return rec;
     } catch (e) {
       $('#b-retry').hidden = false;
       status('PDF готов, но в историю не сохранился: ' + e.message + '. Файл можно скачать или нажать «Сохранить в историю ещё раз».', 'err');
@@ -470,7 +480,7 @@
     var k = state.kp, z = state.ctx.zone, s = state.saved;
     return 'КП ' + k.number + (k.revision > 1 ? ' ред. ' + k.revision : '') + ' на согласование: ' + k.client.object + (k.client.city ? ', ' + k.client.city : '') + ', ' +
       z.area_str + ' м², ' + z.total_str + ' ₸ (' + z.per_m2_str + ' ₸/м²).' +
-      (s && s.changes ? '\nИзменено: ' + s.changes : '') + (s && s.pdf_url ? '\nPDF: ' + s.pdf_url : '');
+      (s && s.changes ? '\nИзменено: ' + s.changes : '') + (s && s.pdf ? '\nPDF: ' + pdfLink(s) : '');
   }
   async function copy(text, okMsg, report) {
     try { await navigator.clipboard.writeText(text); report(okMsg, 'ok'); return true; }
@@ -478,7 +488,7 @@
   }
   function sendToChief() {
     var text = chiefText();
-    if (state.saved && state.saved.pdf_url) { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener'); return; }
+    if (state.saved && state.saved.pdf) { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener'); return; }
     if (canShareFiles()) { navigator.share({ files: [state.pdf], text: text }).catch(function (e) { if (e && e.name !== 'AbortError') status('Отправить не удалось: ' + e.message, 'err'); }); return; }
     copy(text, 'Текст для руководителя скопирован. Файл скачайте кнопкой «Скачать PDF» и приложите.', status);
   }
@@ -496,16 +506,18 @@
     var groups = {}, order = [];
     list.forEach(function (r) { var k = r.uid || r.number; if (!groups[k]) { groups[k] = []; order.push(k); } groups[k].push(r); });
     return order.map(function (k) { return groups[k].sort(function (a, b) { return b.revision - a.revision; }); })
-      .sort(function (a, b) { return String(b[0].created_at).localeCompare(String(a[0].created_at)); });
+      .sort(function (a, b) { return timeOf(b[0]) - timeOf(a[0]); });
   }
   function statusClass(st) { return { 'согласовано': 'ok', 'отправлено клиенту': 'sent', 'отказ': 'no' }[st] || 'new'; }
   function card(g) {
     var r = g[0], older = g.slice(1), key = esc(r.uid) + '|' + r.revision;
-    var actions = (r.pdf_url ? '<a class="hbtn" href="' + esc(r.pdf_url) + '" target="_blank" rel="noopener">Открыть PDF</a><button type="button" class="hbtn" data-act="copy" data-key="' + key + '">Ссылка</button>' : '') +
+    var link = pdfLink(r);
+    var actions = (link ? '<a class="hbtn" href="' + esc(link) + '" target="_blank" rel="noopener">Открыть PDF</a><button type="button" class="hbtn" data-act="copy" data-key="' + key + '">Ссылка</button>' : '') +
       '<button type="button" class="hbtn" data-act="edit" data-key="' + key + '">Изменить</button>' +
-      (historyApi() ? (STATUS_NEXT[r.status] || []).map(function (st) { return '<button type="button" class="hbtn hbtn--st" data-act="status" data-status="' + st + '" data-key="' + key + '">' + cap(st) + '</button>'; }).join('') : '');
+      (historyCfg() ? (STATUS_NEXT[r.status] || []).map(function (st) { return '<button type="button" class="hbtn hbtn--st" data-act="status" data-status="' + st + '" data-key="' + key + '">' + cap(st) + '</button>'; }).join('') : '');
     var olderHtml = older.length ? '<details class="hcard__older"><summary>Ранние ред. (' + older.length + ')</summary><ul>' + older.map(function (o) {
-      return '<li><b>ред. ' + o.revision + '</b> · ' + fmtWhen(o.created_at) + ' · ' + fmtNum(o.total) + ' ₸' + (o.pdf_url ? ' · <a href="' + esc(o.pdf_url) + '" target="_blank" rel="noopener">PDF</a>' : '') +
+      var ol = pdfLink(o);
+      return '<li><b>ред. ' + o.revision + '</b> · ' + whenOf(o) + ' · ' + fmtNum(o.total) + ' ₸' + (ol ? ' · <a href="' + esc(ol) + '" target="_blank" rel="noopener">PDF</a>' : '') +
         (o.changes ? '<div class="hcard__chg">' + esc(o.changes) + '</div>' : '') + '</li>';
     }).join('') + '</ul></details>' : '';
     return '<article class="hcard"><div class="hcard__top"><b>' + esc(r.number) + '</b>' + (r.revision > 1 ? ' <span class="muted-inline">ред. ' + r.revision + '</span>' : '') +
@@ -514,7 +526,7 @@
       '<div class="hcard__meta">' + fmtNum(r.area) + ' м² · ' + esc(r.system_title) + (r.th_mm ? ', ' + fmtNum(r.th_mm) + ' мм' : '') + (r.addons ? ' · ' + esc(r.addons) : '') + '</div>' +
       '<div class="hcard__sum"><b>' + fmtNum(r.total) + ' ₸</b> · ' + fmtNum(r.per_m2) + ' ₸/м²' + (r.estimated ? ' · <span class="warn-inline">оценочные цены</span>' : '') + '</div>' +
       (r.changes ? '<div class="hcard__chg">Изменено: ' + esc(r.changes) + '</div>' : '') +
-      '<div class="hcard__when">' + fmtWhen(r.created_at) + (r.manager_name ? ' · ' + esc(r.manager_name) : '') + '</div>' +
+      '<div class="hcard__when">' + whenOf(r) + (r.manager_name ? ' · ' + esc(r.manager_name) : '') + '</div>' +
       '<div class="hcard__actions">' + actions + '</div>' + olderHtml + '</article>';
   }
   function renderHistory() {
@@ -526,9 +538,25 @@
     $('#h-list').innerHTML = groups.length ? groups.map(card).join('') : '<p class="hint">' + (q ? 'Ничего не найдено.' : 'Пока пусто: соберите КП и нажмите «Получить PDF».') + '</p>';
   }
   function historyNote() {
-    $('#h-note').innerHTML = historyApi()
-      ? 'Все КП менеджеров: кто, когда, какой расчёт и что менялось. PDF по ссылке открывается без пароля.' + (state.sheetUrl ? ' <a href="' + esc(state.sheetUrl) + '" target="_blank" rel="noopener">Таблица истории</a> (доступ у руководителя).' : '')
+    $('#h-note').textContent = historyCfg()
+      ? 'Все КП менеджеров: кто, когда, какой расчёт и что менялось. PDF по ссылке открывается без пароля.'
       : 'Общая история пока не подключена: здесь только КП с этого устройства, без файлов PDF.';
+  }
+  function csvCell(v) { var s = v == null ? '' : String(v); return /[;"\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+  /** Таблица всех КП и ред. для Excel или Google Таблиц (разделитель «;», UTF-8 с BOM). */
+  function exportCsv() {
+    var head = ['Дата', '№ КП', 'Ред.', 'Менеджер', 'Помещение', 'Компания', 'Город', 'Тип помещения', 'Площадь, м²', 'Конструкция', 'Толщина, мм',
+      'Основание', 'Допработы', 'Вариант', 'Итого, ₸', '₸/м²', 'Оценочные цены', 'Что изменилось', 'Статус', 'PDF'];
+    var rows = state.history.slice().sort(function (a, b) { return timeOf(a) - timeOf(b); }).map(function (r) {
+      return [whenOf(r), r.number, r.revision, r.manager_name, r.object, r.company, r.city, r.room, String(r.area || '').replace('.', ','), r.system_title,
+        String(r.th_mm || '').replace('.', ','), r.base_label, r.addons, r.alt, r.total, r.per_m2, r.estimated, r.changes, r.status, pdfLink(r)];
+    });
+    var csv = '\ufeff' + [head].concat(rows).map(function (row) { return row.map(csvCell).join(';'); }).join('\r\n');
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = 'Kaztop-КП-история-' + KP.fmt.todayIso() + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    hStatus('Таблица выгружена: ' + rows.length + ' строк.', 'ok');
   }
   async function openHistory() {
     show('history');
@@ -547,13 +575,12 @@
     var rec = findRecord(btn.getAttribute('data-key')); if (!rec) return;
     var act = btn.getAttribute('data-act');
     if (act === 'edit') { editRecord(rec); return; }
-    if (act === 'copy') { copy(rec.pdf_url, 'Ссылка на PDF ' + rec.number + ' скопирована.', hStatus); return; }
+    if (act === 'copy') { copy(pdfLink(rec), 'Ссылка на PDF ' + rec.number + ' скопирована.', hStatus); return; }
     if (act === 'status') {
       var st = btn.getAttribute('data-status');
       btn.disabled = true;
       try {
-        var out = await call('status', { uid: rec.uid, revision: rec.revision, status: st }, 30000);
-        if (!out.ok) throw new Error(errorText(out));
+        await KPH.publish(historyCfg(), { t: 'status', uid: rec.uid, revision: rec.revision, status: st });
         rec.status = st; renderHistory(); hStatus(rec.number + ': ' + st + '.', 'ok');
       } catch (e) { btn.disabled = false; hStatus('Статус не изменён: ' + e.message, 'err'); }
     }
@@ -582,7 +609,8 @@
     $('#b-h-refresh').addEventListener('click', openHistory);
     $('#h-search').addEventListener('input', renderHistory);
     $('#h-list').addEventListener('click', onHistoryClick);
-    $('#b-logout').addEventListener('click', function () { localStorage.removeItem(PW_KEY); state.data = null; state.history = []; show('lock'); });
+    $('#b-h-csv').addEventListener('click', exportCsv);
+    $('#b-logout').addEventListener('click', function () { localStorage.removeItem(PW_KEY); state.data = null; state.cfg = undefined; state.history = []; show('lock'); });
     window.addEventListener('resize', function () { if (!$('#result').hidden) fitPages(); });
     var saved = localStorage.getItem(PW_KEY);
     if (saved) unlock(saved).catch(function () { localStorage.removeItem(PW_KEY); show('lock'); });

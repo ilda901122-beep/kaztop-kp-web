@@ -1,0 +1,31 @@
+# Перенос общей истории КП из релея ntfy в ветку history: каждые 10 минут и по кнопке.
+# Данные зашифрованы на странице менеджера, здесь не расшифровываются.
+name: history-archive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: history-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+      - name: Archive new records and PDF files
+        env:
+          KP_HISTORY_TOPIC: ${{ secrets.KP_HISTORY_TOPIC }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/scripts/archive_history.py
