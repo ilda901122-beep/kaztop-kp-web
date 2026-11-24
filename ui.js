@@ -576,7 +576,7 @@
     $('#b-copy').addEventListener('click', copyClientText);
     $('#b-edit').addEventListener('click', function () { updateFormMode(); show('form'); });
     $('#b-new').addEventListener('click', startNew);
-    $('#nav-form').addEventListener('click', function () { if (state.saved || state.editing) startNew(); else show(state.kp ? 'result' : 'form'); });
+    $('#nav-form').addEventListener('click', function () { if (state.saved || state.editing) startNew(); else show('form'); });
     $('#nav-history').addEventListener('click', openHistory);
     $('#b-h-refresh').addEventListener('click', openHistory);
     $('#h-search').addEventListener('input', renderHistory);
