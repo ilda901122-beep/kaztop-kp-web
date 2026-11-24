@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#053b46">
+<title>Kaztop · коммерческое предложение</title>
+<link rel="stylesheet" href="kp.css">
+<link rel="stylesheet" href="ui.css">
+</head>
+<body>
+<header class="top"><span class="top__brand">KAZTOP</span><span class="top__title">Коммерческое предложение</span><button type="button" id="b-logout" class="top__out" title="Выйти">Выйти</button></header>
+
+<section id="lock" class="screen" hidden>
+  <form id="lock-form" class="panel">
+    <h1>Вход</h1>
+    <p class="hint">Пароль выдаёт руководитель. Он запоминается на этом устройстве.</p>
+    <label class="field"><span>Пароль</span><input id="password" type="password" autocomplete="current-password" required></label>
+    <p id="lock-error" class="error" role="alert"></p>
+    <button type="submit" class="primary">Открыть</button>
+  </form>
+</section>
+
+<section id="form" class="screen" hidden>
+  <form id="kp-form" class="panel" autocomplete="off">
+    <h1>Новое КП</h1>
+    <label class="field"><span>Что за помещение</span><input id="f-object" type="text" placeholder="Склад готовой продукции" required maxlength="60"></label>
+    <label class="field"><span>Компания или объект</span><input id="f-company" type="text" placeholder="ТОО «Ромашка» (можно пусто)" maxlength="60"></label>
+    <div class="row">
+      <label class="field"><span>Площадь, м²</span><input id="f-area" type="text" inputmode="decimal" placeholder="1200" required></label>
+      <label class="field"><span>Город</span><input id="f-city" type="text" placeholder="Караганда" maxlength="40"></label>
+    </div>
+    <label class="field"><span>Тип помещения</span><select id="f-room"></select></label>
+    <label class="field"><span>Конструкция пола</span><select id="f-system"></select></label>
+    <label class="field"><span>Показать вариант для сравнения</span><select id="f-alt"></select></label>
+    <label class="field"><span>Основание</span><select id="f-base"></select></label>
+    <div class="row">
+      <label class="field"><span>Цвет RAL</span><select id="f-ral"></select></label>
+      <label class="field"><span>Номер КП</span><input id="f-number" type="text" required></label>
+    </div>
+    <label class="field" hidden><span>Менеджер</span><select id="f-manager"></select></label>
+    <label class="check"><input id="f-colour" type="checkbox"> Добавить страницу с цветами и флоками</label>
+    <p class="hint">Без ФИО и телефонов клиента: в КП только компания, объект и город. Цены действуют <span id="f-valid"></span> дней.</p>
+    <p id="form-error" class="error" role="alert"></p>
+    <button type="submit" class="primary">Собрать КП</button>
+  </form>
+</section>
+
+<section id="result" class="screen" hidden>
+  <div class="panel panel--bar">
+    <div class="bar-title" id="r-title"></div>
+    <div class="actions">
+      <button type="button" id="b-download" class="primary">Скачать PDF</button>
+      <button type="button" id="b-share" class="primary" hidden>Отправить в WhatsApp</button>
+      <button type="button" id="b-copy">Текст сообщения</button>
+      <button type="button" id="b-edit">Изменить</button>
+    </div>
+    <p id="status" class="status"></p>
+    <textarea id="wa-text" class="wa-text" rows="5" readonly hidden></textarea>
+  </div>
+  <div class="preview"><div id="pages" class="pages"></div></div>
+  <div id="a4" class="a4-holder" aria-hidden="true"></div>
+</section>
+
+<script src="vendor/html2canvas.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="app.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+/* Интерфейс конструктора (не страницы КП). */
+html { background: #eef4f5; }
+body { margin: 0; font-family: "Manrope", "Segoe UI", system-ui, sans-serif; color: #0e1c21; }
+[hidden] { display: none !important; }
+.top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #053b46; color: #eef6f8; font-size: 15px; }
+.top__brand { font-weight: 800; letter-spacing: 0.12em; }
+.top__title { opacity: 0.8; flex: 1; }
+.top__out { background: none; border: 1px solid rgba(255,255,255,0.3); color: #eef6f8; border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 13px; }
+.screen { max-width: 640px; margin: 0 auto; padding: 16px 12px 40px; }
+.panel { background: #fff; border-radius: 16px; padding: 18px 16px; box-shadow: 0 2px 10px rgba(14,28,33,0.06); }
+.panel h1 { font-size: 22px; margin: 0 0 10px; font-weight: 800; }
+.hint { color: #55656b; font-size: 14px; margin: 0 0 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; font-size: 14px; color: #55656b; }
+.field input, .field select { font: inherit; font-size: 16px; color: #0e1c21; padding: 10px 12px; border: 1px solid rgba(14,28,33,0.18); border-radius: 10px; background: #fbfcfc; }
+.field input:focus, .field select:focus { outline: 2px solid #00afca; outline-offset: 1px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.check { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; font-size: 15px; }
+.error { color: #c1121f; font-size: 14px; min-height: 1.2em; margin: 0 0 8px; }
+button { font: inherit; cursor: pointer; }
+.primary { background: #00afca; color: #fff; border: 0; border-radius: 11px; padding: 14px 18px; font-size: 16px; font-weight: 800; width: 100%; }
+.primary:active { background: #0797ad; }
+.panel--bar { position: sticky; top: 52px; z-index: 4; }
+.bar-title { font-weight: 700; margin-bottom: 10px; font-size: 15px; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.actions button { border-radius: 11px; padding: 12px 10px; font-size: 15px; font-weight: 700; border: 1px solid rgba(14,28,33,0.18); background: #fff; }
+.actions .primary { grid-column: 1 / -1; border: 0; }
+.status { font-size: 14px; color: #55656b; margin: 10px 0 0; min-height: 1.2em; }
+.status--ok { color: #0b6b3a; }
+.status--warn { color: #9a6700; }
+.status--err { color: #c1121f; }
+.wa-text { width: 100%; margin-top: 8px; font: inherit; font-size: 14px; border-radius: 10px; border: 1px solid rgba(14,28,33,0.18); padding: 8px; }
+.preview { margin-top: 14px; overflow: hidden; }
+.pages { transform-origin: top left; width: 390px; }
+.pages .page { margin: 0 0 12px; box-shadow: 0 2px 10px rgba(14,28,33,0.08); }
+.a4-holder { position: absolute; left: -10000px; top: 0; width: 794px; }
+.a4 { width: 794px; min-height: 1123px; padding: 53px 53px 60px; box-sizing: border-box; background: #fff; font-family: "Manrope", "Segoe UI", sans-serif; font-size: 14px; line-height: 1.35; color: #0e1c21; }
+.a4 .head { text-align: center; margin-bottom: 15px; }
+.a4 .head__name { font-size: 23px; font-weight: 800; letter-spacing: 0.02em; }
+.a4 .head__addr { font-size: 12px; color: #55656b; }
+.a4 .to { text-align: right; font-weight: 700; margin: 19px 0 26px; }
+.a4 .title { text-align: center; font-weight: 800; font-size: 16px; margin-bottom: 6px; }
+.a4 .num { text-align: center; color: #55656b; font-size: 12.7px; margin-bottom: 23px; }
+.a4 table { border-collapse: collapse; width: 100%; font-size: 13.3px; }
+.a4 th, .a4 td { border: 1px solid #0e1c21; padding: 6px 7.5px; vertical-align: middle; }
+.a4 th { font-weight: 700; text-align: center; background: #eef4f5; }
+.a4 td.r { text-align: right; white-space: nowrap; }
+.a4 td.c { text-align: center; }
+.a4 tr.zone td { background: #fff4c2; font-weight: 700; text-align: center; }
+.a4 tr.grp td { font-weight: 700; text-align: center; border-left: 0; border-right: 0; }
+.a4 tr.sum td { font-weight: 700; }
+.a4 tr.grand td { font-weight: 800; font-size: 14px; }
+.a4 tr.per td { font-weight: 700; border: 0; border-top: 1px solid #0e1c21; }
+.a4 .terms { margin: 23px 0 0; font-style: italic; text-align: center; font-weight: 600; }
+.a4 .legal { margin-top: 15px; font-size: 12px; color: #55656b; text-align: center; }
+.a4 .sign { margin-top: 60px; display: flex; justify-content: space-between; font-weight: 700; padding: 0 38px; }
