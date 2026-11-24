@@ -7,12 +7,25 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
   var NB = ' ';
-  var AREA_S = 2, RATE_S = 3, PRICE_S = 2;
+  var AREA_S = 2, RATE_S = 3, PRICE_S = 2, TH_S = 2, QTY_S = 2;
   var LAYER_ROLES = ['primer', 'base', 'base_thick', 'aggregate', 'finish', 'sealer'];
-  var PAGE_ORDER = ['cover', 'object', 'layers', 'price', 'estimate', 'compare', 'why', 'process', 'colour', 'next'];
+  var PAGE_ORDER = ['cover', 'object', 'layers', 'price', 'estimate', 'prep', 'compare', 'why', 'process', 'colour', 'next'];
   var FACT_KEYS = ['production', 'stock', 'shipping', 'delivery_astana_free', 'own_crew', 'lab', 'cert_stkz'];
   var MAX_FACTS = 4;
   var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+  var EXCL_REPAIR = 'ремонт трещин и выбоин: объём по результату осмотра';
+  var EXCL_DELIVERY = 'доставка материалов за пределы Астаны';
+  var PREP_BUDGET_PX = 400, PREP_BLOCK_PX = 70, PREP_ROW_PX = 60, PREP_SUBTOTAL_PX = 32;
+  function paginateBlocks(blocks) {
+    var pages = [], used = 0;
+    blocks.forEach(function (b) {
+      var px = PREP_BLOCK_PX + PREP_ROW_PX * (b.materials.length + b.works.length) + PREP_SUBTOTAL_PX;
+      if (pages.length && used + px > PREP_BUDGET_PX) { pages.push([b]); used = px; }
+      else if (!pages.length) { pages.push([b]); used = px; }
+      else { pages[pages.length - 1].push(b); used += px; }
+    });
+    return pages;
+  }
 
   // ---------- точные числа ----------
   function pow10(n) { return 10n ** BigInt(n); }
@@ -36,11 +49,13 @@
     return nd ? group(intPart) + ',' + frac : group(intPart);
   }
   function fmtPrice(priceC) { return priceC % 100n === 0n ? fmtScaled(priceC, PRICE_S, 0) : fmtScaled(priceC, PRICE_S, 2); }
-  function fmtRate(str) {
-    var s = String(str).replace(',', '.');
-    if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
-    return s.replace('.', ',');
+  function fmtDecScaled(v, scale) {
+    var s = v.toString();
+    while (s.length < scale + 1) s = '0' + s;
+    var intPart = s.slice(0, -scale), frac = s.slice(-scale).replace(/0+$/, '');
+    return frac ? intPart + ',' + frac : intPart;
   }
+  function fmtRate(str) { return fmtDecScaled(parseDec(str, RATE_S), RATE_S); }
   function fmtInt(v) { return group(v.toString()); }
   function pl(n, one, few, many) {
     var k = Math.abs(Number(n));
@@ -59,47 +74,96 @@
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
   // ---------- расчёт ----------
-  function calcZone(areaStr, system, materials, mode) {
-    mode = mode || 'excel';
+  function thickness(system, thMm) {
+    var spec = system.th_mm;
+    if (!spec) return { th: null, thC: null, defC: null };
+    var defC = parseDec(spec.default, TH_S);
+    var thC = (thMm === null || thMm === undefined || thMm === '') ? defC : parseDec(thMm, TH_S);
+    if (thC < parseDec(spec.min, TH_S) || thC > parseDec(spec.max, TH_S)) throw new Error('толщина ' + fmtDecScaled(thC, TH_S) + ' мм вне диапазона ' + spec.min + '-' + spec.max + ' для ' + system.id);
+    return { th: fmtDecScaled(thC, TH_S), thC: thC, defC: defC };
+  }
+  function matLine(code, rateM, qtyBase, materials, kind, scaled) {
+    var m = materials.items[code];
+    if (!m) throw new Error('нет материала ' + code);
+    if (m.price === null || m.price === undefined) throw new Error('у материала ' + code + ' нет цены: расчёт по запросу');
+    var price = parseDec(m.price, PRICE_S);
+    var qty = qtyBase * rateM;                     // scale 5
+    var exact = qty * price;                       // scale 7
+    var shown = roundHalfUp(exact, pow10(7));
+    return { kind: kind, code: code, name: m.name, client_name: m.client_name || m.name, client_text: m.client_text || '', role: m.role, unit: m.unit,
+      rate_str: fmtDecScaled(rateM, RATE_S), scaled: !!scaled, qty_str: fmtScaled(qty, 5, 2), price_str: fmtPrice(price), exact7: exact, shown: shown,
+      sum_str: fmtInt(shown), estimated: !!m.estimated, source: m.source || '' };
+  }
+  function workLine(name, priceStr, qtyC, unit, kind, source) {
+    var price = parseDec(priceStr, PRICE_S);
+    var exact7 = qtyC * price * 1000n;             // scale 4 -> 7
+    var shown = roundHalfUp(exact7, pow10(7));
+    return { kind: kind, name: name, unit: unit, qty_str: fmtScaled(qtyC, QTY_S, 2), price_str: fmtPrice(price), exact7: exact7, shown: shown, sum_str: fmtInt(shown),
+      estimated: (source || '').indexOf('оценка') === 0, source: source || '' };
+  }
+  function calcZone(areaStr, system, materials, mode, opts) {
+    mode = mode || 'excel'; opts = opts || {};
+    var data = opts.data || {};
     if (mode !== 'excel' && mode !== 'lines') throw new Error('режим округления ' + mode);
+    if (system.quote_only) throw new Error('рецептура ' + system.id + ' считается по запросу');
     var area = parseDec(areaStr, AREA_S);
     if (area <= 0n) throw new Error('площадь должна быть больше нуля');
+    var t = thickness(system, opts.th_mm);
     var mats = [];
-    var groups = [['layer', system.layers || []], ['consumable', system.consumables || []]];
-    groups.forEach(function (g) {
-      g[1].forEach(function (row) {
-        var m = materials.items[row.code];
-        if (!m) throw new Error('нет материала ' + row.code);
-        var rate = parseDec(row.rate, RATE_S);
-        var price = parseDec(m.price, PRICE_S);
-        var qty = area * rate;                 // scale 5
-        var exact = qty * price;               // scale 7
-        var shown = roundHalfUp(exact, pow10(7));
-        mats.push({ kind: g[0], code: row.code, name: m.name, client_name: m.client_name || m.name, client_text: m.client_text || '',
-          role: m.role, unit: m.unit, rate: row.rate, rate_str: fmtRate(row.rate), qty_str: fmtScaled(qty, 5, 2),
-          price_str: fmtPrice(price), exact7: exact, shown: shown, sum_str: fmtInt(shown) });
-      });
+    (system.layers || []).forEach(function (row) {
+      var rateM = parseDec(row.rate, RATE_S);
+      var scaled = !!row.scales && t.thC !== null && t.thC !== t.defC;
+      if (scaled) rateM = roundHalfUp(rateM * t.thC, t.defC);
+      mats.push(matLine(row.code, rateM, area, materials, 'layer', scaled));
     });
+    (system.consumables || []).forEach(function (row) { mats.push(matLine(row.code, parseDec(row.rate, RATE_S), area, materials, 'consumable', false)); });
     var works = [];
-    system.works.forEach(function (w) {
-      var price = parseDec(w.price, PRICE_S);
-      var exact7 = area * price * 1000n;       // scale 4 -> 7
-      var shown = roundHalfUp(exact7, pow10(7));
-      works.push({ name: w.name, unit: 'м2', qty_str: fmtScaled(area, AREA_S, 2), price_str: fmtPrice(price), exact7: exact7, shown: shown, sum_str: fmtInt(shown) });
+    (system.works || []).forEach(function (w) {
+      var c = typeof w === 'string' ? data.works_catalog[w] : w;
+      works.push(workLine(c.name, c.price, area, 'м2', 'system', c.source));
     });
-    var worksTotal7 = works.reduce(function (a, w) { return a + w.exact7; }, 0n);
-    var matTotal7 = mats.reduce(function (a, m) { return a + (mode === 'excel' ? m.exact7 : m.shown * pow10(7)); }, 0n);
+    var blocks = [];
+    (opts.addons || []).forEach(function (a) {
+      var defn = data.addons[a.id];
+      if (!defn) throw new Error('допработа ' + a.id + ' неизвестна');
+      var qtyC;
+      if (defn.unit === 'м²') qtyC = area;
+      else { qtyC = parseDec(a.qty || '0', QTY_S); if (qtyC <= 0n) throw new Error('для «' + defn.title + '» нужна длина в м.п.'); }
+      var block = { id: defn.id, title: defn.title, short: defn.short || defn.title, client_text: defn.client_text || '', unit: defn.unit, qtyC: qtyC,
+        qty_str: defn.unit === 'м.п.' ? fmtScaled(qtyC, QTY_S, 2) : fmtScaled(qtyC, QTY_S, 0), materials: [], works: [] };
+      (defn.materials || []).forEach(function (mrow) {
+        var line = matLine(mrow.code, parseDec(mrow.rate, RATE_S), qtyC, materials, 'addon', false);
+        line.addon = defn.id; line.addon_title = defn.title; line.per_unit = defn.unit;
+        block.materials.push(line); mats.push(line);
+      });
+      (defn.works || []).forEach(function (wrow) {
+        var line = workLine(wrow.name, wrow.price, qtyC, defn.unit, 'addon', wrow.source);
+        line.addon = defn.id; line.addon_title = defn.title;
+        block.works.push(line); works.push(line);
+      });
+      block.subtotal = roundHalfUp(block.materials.concat(block.works).reduce(function (s, x) { return s + x.exact7; }, 0n), pow10(7));
+      blocks.push(block);
+    });
+    var q = function (v7) { return roundHalfUp(v7, pow10(7)); };
+    var worksTotal7 = works.reduce(function (s, w) { return s + w.exact7; }, 0n);
+    var matTotal7 = mats.reduce(function (s, m) { return s + (mode === 'excel' ? m.exact7 : m.shown * pow10(7)); }, 0n);
     var total7 = worksTotal7 + matTotal7;
     var perM2 = roundHalfUp(total7, area * pow10(5));
+    var sysItems = mats.filter(function (m) { return m.kind !== 'addon'; }).concat(works.filter(function (w) { return w.kind === 'system'; }));
+    var sysTotal7 = sysItems.reduce(function (s, x) { return s + (mode === 'excel' ? x.exact7 : x.shown * pow10(7)); }, 0n);
     var matPct = total7 > 0n ? Number(roundHalfUp(matTotal7 * 100n, total7)) : 0;
-    var q = function (v7) { return roundHalfUp(v7, pow10(7)); };
+    var est = {};
+    mats.forEach(function (m) { if (m.estimated) est[m.client_name] = 1; });
+    works.forEach(function (w) { if (w.estimated) est[w.name] = 1; });
     return {
-      mode: mode, area: area, system_id: system.id, materials: mats,
-      layers: mats.filter(function (m) { return LAYER_ROLES.indexOf(m.role) >= 0; }),
-      works: works,
-      works_total: q(worksTotal7), materials_total: q(matTotal7), total: q(total7), per_m2: perM2,
+      mode: mode, area: area, system_id: system.id, th_mm: t.th, materials: mats,
+      layers: mats.filter(function (m) { return m.kind === 'layer' && LAYER_ROLES.indexOf(m.role) >= 0; }),
+      system_materials: mats.filter(function (m) { return m.kind !== 'addon'; }), system_works: works.filter(function (w) { return w.kind === 'system'; }),
+      works: works, addons: blocks,
+      works_total: q(worksTotal7), materials_total: q(matTotal7), total: q(total7), per_m2: perM2, system_total: q(sysTotal7),
       materials_pct: matPct, works_pct: 100 - matPct,
       area_str: area % 100n === 0n ? fmtScaled(area, AREA_S, 0) : fmtScaled(area, AREA_S, 2),
+      estimated: Object.keys(est).sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; }),
     };
   }
 
@@ -169,22 +233,53 @@
     for (var i = 0; i < all.length; i++) if (all[i].ral === ral) return [all[i].ral, all[i].hex];
     return [palette.basics[1].ral, palette.basics[1].hex];
   }
+  function scopeFor(system, data, addonIds) {
+    var base = system.scope || data.scope_default;
+    var included = base.included.slice();
+    if (system.fresh_concrete) included = ['упрочнитель и мембрана по свежеуложенному бетону', 'материалы Kaztop в объёме по расходу', 'затирка нашей бригадой'];
+    addonIds.forEach(function (id) { included.push(data.addons[id].title.toLowerCase()); });
+    var excluded = [];
+    if (!addonIds.some(function (id) { return id === 'cracks' || id === 'levelling' || id === 'demolition'; })) excluded.push(EXCL_REPAIR);
+    excluded.push(EXCL_DELIVERY);
+    var marking = addonIds.indexOf('marking') >= 0, plinth = addonIds.indexOf('plinth') >= 0;
+    if (!marking && !plinth) excluded.push('разметка и плинтусы');
+    else if (!marking) excluded.push('разметка');
+    else if (!plinth) excluded.push('плинтусы');
+    if (system.scope_note) excluded.push(system.scope_note.replace(/\.$/, '').toLowerCase());
+    return { included: included, excluded: excluded };
+  }
+  function matRow(m) {
+    var row = { code: m.code, name: m.name, client_name: m.client_name, client_text: m.client_text, role: m.role, unit: m.unit, rate_str: m.rate_str,
+      qty_str: m.qty_str, price_str: m.price_str, sum_str: m.sum_str, kind: m.kind, scaled: m.scaled, estimated: m.estimated };
+    if (m.kind === 'addon') { row.addon_title = m.addon_title; row.per_unit = m.per_unit; }
+    return row;
+  }
+  function workRow(w) { return { name: w.name, unit: w.unit, qty_str: w.qty_str, price_str: w.price_str, sum_str: w.sum_str, kind: w.kind, estimated: w.estimated, addon_title: w.addon_title || null }; }
   function zoneCtx(z, data, mode) {
     var system = data.systems[z.system];
     if (!system) throw new Error('рецептура ' + z.system + ' неизвестна');
-    var r = calcZone(z.area_m2, system, data.materials, mode);
-    var works = r.works.map(function (w, i) { return { n: i + 1, name: w.name, qty_str: w.qty_str, price_str: w.price_str, sum_str: w.sum_str }; });
+    var r = calcZone(z.area_m2, system, data.materials, mode, { th_mm: z.th_mm, addons: z.addons || [], data: data });
+    var n = 0;
+    var works = r.works.map(function (w) { n += 1; var row = workRow(w); row.n = n; return row; });
     var materials = [], layers = [], consumables = []; var k = 0;
-    r.materials.forEach(function (m, i) {
-      var row = { n: works.length + 1 + i, code: m.code, name: m.name, client_name: m.client_name, client_text: m.client_text, role: m.role, unit: m.unit,
-        rate_str: m.rate_str, qty_str: m.qty_str, price_str: m.price_str, sum_str: m.sum_str };
-      materials.push(row);
-      if (LAYER_ROLES.indexOf(m.role) >= 0) { k += 1; layers.push(Object.assign({}, row, { n: k })); } else consumables.push(row);
+    r.materials.forEach(function (m) {
+      n += 1; var row = matRow(m); row.n = n; materials.push(row);
+      if (m.kind === 'layer' && LAYER_ROLES.indexOf(m.role) >= 0) { k += 1; layers.push(Object.assign({}, row, { n: k })); }
+      else if (m.kind === 'consumable') consumables.push(row);
+    });
+    var blocks = r.addons.map(function (b) {
+      return { id: b.id, title: b.title, short: b.short, client_text: b.client_text, unit: b.unit, qty_str: b.qty_str,
+        materials: b.materials.map(matRow), works: b.works.map(workRow), subtotal_str: fmtInt(b.subtotal) };
     });
     var name = z.name || 'Тип пола 1';
-    return { name: name, name_dat: name.replace('Тип пола', 'Типу пола'), area_str: r.area_str, system: system, materials: materials, layers: layers,
-      consumables: consumables, works: works, works_total_str: fmtInt(r.works_total), materials_total_str: fmtInt(r.materials_total),
-      total_str: fmtInt(r.total), per_m2_str: fmtInt(r.per_m2), materials_pct: r.materials_pct, works_pct: r.works_pct, calc: r };
+    return { name: name, name_dat: name.replace('Тип пола', 'Типу пола'), area_str: r.area_str, th_mm: r.th_mm, th_str: r.th_mm !== null ? r.th_mm + NB + 'мм' : null,
+      system: system, scope: scopeFor(system, data, r.addons.map(function (b) { return b.id; })),
+      materials: materials, layers: layers, consumables: consumables, works: works,
+      system_materials: materials.filter(function (m) { return m.kind !== 'addon'; }), system_works: works.filter(function (w) { return w.kind === 'system'; }),
+      addons: blocks, system_total_str: fmtInt(r.system_total), addons_total_str: fmtInt(r.total - r.system_total), has_addons: blocks.length > 0,
+      prep_pages: paginateBlocks(blocks).map(function (chunk, i) { return { key: 'prep' + (i + 1), blocks: chunk }; }),
+      works_total_str: fmtInt(r.works_total), materials_total_str: fmtInt(r.materials_total), total_str: fmtInt(r.total), per_m2_str: fmtInt(r.per_m2),
+      materials_pct: r.materials_pct, works_pct: r.works_pct, estimated: r.estimated, calc: r };
   }
   function cureCtx(zone, data) {
     if (data.company.flags.show_cure_times === false) return null;
@@ -197,12 +292,12 @@
     if (cure.chem_days) { var d = cure.chem_days[i]; out.chem = 'через ' + d + ' ' + pl(d, 'сутки', 'суток', 'суток'); }
     return out;
   }
-  function photoSrc(file, base) { return (base || 'assets/photos/') + file; }
   function buildContext(kp, data, opts) {
     opts = opts || {};
     var company = data.company; var o = kp.options || {}; var mode = o.rounding || 'excel';
-    var zone = zoneCtx(kp.zones[0], data, mode);
-    var alternatives = o.show_comparison ? (kp.alternatives || []).map(function (a) { return zoneCtx({ area_m2: kp.zones[0].area_m2, system: a.system, name: zone.name }, data, mode); }) : [];
+    var z0 = kp.zones[0];
+    var zone = zoneCtx(z0, data, mode);
+    var alternatives = o.show_comparison ? (kp.alternatives || []).map(function (a) { return zoneCtx({ area_m2: z0.area_m2, system: a.system, name: zone.name, th_mm: a.th_mm }, data, mode); }) : [];
     var room = data.rooms.rooms[kp.room_type]; if (!room) throw new Error('тип помещения ' + kp.room_type + ' неизвестен');
     var rh = ralHex(data.palette, (kp.colour || {}).ral); var ral = rh[0], hex = rh[1];
     var svg = layersSvg(zone.layers.map(function (l) { return { role: l.role }; }), hex, 's');
@@ -212,7 +307,7 @@
     var exclude = company.flags.exclude_photos || [];
     var roomPhotos = (data.photos.rooms[kp.room_type] || []).filter(function (p) { return exclude.indexOf(p.file.replace(/\.[a-z]+$/, '')) < 0; });
     if (!roomPhotos.length) throw new Error('нет фото для типа помещения ' + kp.room_type);
-    var photo = function (p) { return { src: photoSrc(p.file, opts.photoBase), caption: p.caption }; };
+    var photo = function (p) { return { src: (opts.photoBase || 'assets/photos/') + p.file, caption: p.caption }; };
     var showObjects = company.flags.show_objects !== false;
     var photos = { cover: photo(roomPhotos[0]), similar: showObjects ? roomPhotos.slice(1, 3).map(photo) : [] };
     var projects = showObjects ? data.projects.items.filter(function (p) { return p.rooms.indexOf(kp.room_type) >= 0; }).slice(0, 3) : [];
@@ -225,13 +320,18 @@
         flakes: data.palette.flakes.slice(0, 6).map(function (f) { return { id: f.id, src: (opts.flakeBase || 'assets/flakes/') + f.file }; }),
         chosen: ral, disclaimer: data.palette.disclaimer };
     }
-    var pages = PAGE_ORDER.filter(function (p) { return (p !== 'compare' || alternatives.length) && (p !== 'colour' || palette); });
+    var pages = [];
+    PAGE_ORDER.forEach(function (p) {
+      if (p === 'prep') zone.prep_pages.forEach(function (pp) { pages.push(pp.key); });
+      else if ((p !== 'compare' || alternatives.length) && (p !== 'colour' || palette)) pages.push(p);
+    });
     var pageNo = {}; pages.forEach(function (p, i) { pageNo[p] = i + 1; });
     var notes = kp.notes || []; var vat = data.materials.vat;
+    var baseLabel = kp.base ? data.base_conditions[kp.base].label : (notes.length ? notes[0] : 'уточняется при выезде');
     return {
       company: company, manager: manager,
       kp: { number: kp.number, date_dmy: dmy(kp.date), date_words: dateWords(kp.date), valid_until_dmy: dmy(validUntil), valid_until_words: dateWords(validUntil),
-        client: kp.client, addressee: kp.client.addressee || company.addressee_default, base_note: notes.length ? notes[0] : 'уточняется при выезде', notes: notes, status: kp.status || 'draft' },
+        client: kp.client, addressee: kp.client.addressee || company.addressee_default, base_note: baseLabel, notes: notes, status: kp.status || 'draft' },
       room: room, zone: zone, alternatives: alternatives, svg: svg, photos: photos, projects: projects, facts: facts, steps: data.process.steps,
       cure: cureCtx(zone, data), palette: palette, pages: pages, page_no: pageNo, page_total: pages.length,
       wa: { url: 'https://wa.me/' + manager.whatsapp + '?text=' + encodeURIComponent(waText), text: waText, tel: 'tel:' + manager.tel },
@@ -247,6 +347,7 @@
     return '<div class="rh"><span class="rh__brand">' + logo('') + esc(ctx.company.brand) + '</span><span class="rh__num">' + esc(ctx.kp.number) + ' · ' + ctx.page_no[page] + ' / ' + ctx.page_total + '</span></div>';
   }
   function ticks(items) { return '<ul class="ticks">' + items.map(function (a) { return '<li>' + esc(a) + '</li>'; }).join('') + '</ul>'; }
+  function estRow(nm, calcTxt, sum) { return '<div class="est__row"><div><div class="nm">' + nm + '</div><div class="calc">' + calcTxt + '</div></div><div class="sum">' + sum + ' ₸</div></div>'; }
   function renderPhone(ctx) {
     var c = ctx, k = ctx.kp, z = ctx.zone, s = [];
     s.push('<section class="page cover">' +
@@ -256,12 +357,13 @@
       '<p class="cover__meta"><strong>' + z.area_str + ' м²</strong>' + (k.client.city ? ' · ' + esc(k.client.city) : '') + ' · ' + esc(k.client.company) + '</p>' +
       '<p class="cover__sys">Пол: <b>' + esc(z.system.title) + '</b></p>' +
       '<div class="cover__foot"><span>№ <b>' + esc(k.number) + '</b><br>от ' + k.date_words + '</span><span>действует до<br><b>' + k.valid_until_words + '</b></span></div></div></section>');
+    var prepRow = z.has_addons ? '<dt>Подготовка</dt><dd>' + z.addons.map(function (b) { return esc(b.short); }).join('; ') + '</dd>' : '';
     s.push('<section class="page">' + rh(c, 'object') + '<h2>Ваш объект</h2><div class="card"><dl class="kv">' +
       '<dt>Помещение</dt><dd>' + esc(k.client.object) + '</dd><dt>Тип</dt><dd>' + esc(c.room.short) + '</dd><dt>Площадь</dt><dd>' + z.area_str + ' м²</dd>' +
-      (k.client.city ? '<dt>Город</dt><dd>' + esc(k.client.city) + '</dd>' : '') + '<dt>Основание</dt><dd>' + esc(k.base_note) + '</dd></dl></div>' +
-      '<div class="sect"><h3>Что важно для такого пола</h3>' + ticks(c.room.adv.slice(0, 4)) + '</div>' +
-      '<div class="sect"><h3>Предлагаем</h3><p class="lead">' + esc(z.system.title) + '</p><p class="small gives">' + z.system.gives.map(esc).join('; ') + '.</p></div></section>');
-    s.push('<section class="page">' + rh(c, 'layers') + '<h2>Конструкция пола</h2><p class="muted small">Слои снизу вверх, расход по техлистам Kaztop.</p>' +
+      (k.client.city ? '<dt>Город</dt><dd>' + esc(k.client.city) + '</dd>' : '') + '<dt>Основание</dt><dd>' + esc(k.base_note) + '</dd>' + prepRow + '</dl></div>' +
+      '<div class="sect"><h3>Что важно для такого пола</h3>' + ticks(c.room.adv.slice(0, z.has_addons ? 3 : 4)) + '</div>' +
+      '<div class="sect"><h3>Предлагаем</h3><p class="lead">' + esc(z.system.title) + (z.th_str ? ', ' + z.th_str : '') + '</p><p class="small gives">' + z.system.gives.map(esc).join('; ') + '.</p></div></section>');
+    s.push('<section class="page">' + rh(c, 'layers') + '<h2>Конструкция пола</h2><p class="muted small">Слои снизу вверх' + (z.th_str ? ', общая толщина ' + z.th_str : '') + '. Расход по техлистам Kaztop.</p>' +
       '<div class="slab">' + c.svg + '</div><ul class="legend">' +
       z.layers.map(function (l) { return '<li><span class="n">' + l.n + '</span><div><b>' + esc(l.client_name) + '</b> <span class="spec">· ' + l.rate_str + ' ' + esc(l.unit) + '/м²</span><div class="how">' + esc(l.client_text) + '</div></div></li>'; }).join('') + '</ul>' +
       (z.consumables.length ? '<p class="muted small">Подготовка: ' + z.consumables.map(function (x) { return esc(x.client_text); }).join('; ') + '.</p>' : '') + '</section>');
@@ -270,17 +372,28 @@
       '<div class="bar"><div class="bar__m" style="width: ' + z.materials_pct + '%"></div><div class="bar__w" style="width: ' + z.works_pct + '%"></div></div>' +
       '<div class="bar-legend"><span>Материалы <b>' + z.materials_total_str + ' ₸</b></span><span>Работы <b>' + z.works_total_str + ' ₸</b></span></div>' +
       '<div class="terms"><b>' + esc(c.company.terms.advance) + '.</b><br>Цены действуют до ' + k.valid_until_words + '.</div>' +
-      '<div class="scope"><div><h3>Входит</h3><ul>' + z.system.scope.included.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>' +
-      '<div class="no"><h3>Не входит</h3><ul>' + z.system.scope.excluded.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div></div>' +
+      '<div class="scope"><div><h3>Входит</h3><ul>' + z.scope.included.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>' +
+      '<div class="no"><h3>Не входит</h3><ul>' + z.scope.excluded.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div></div>' +
       '<p class="muted small" style="margin-top:auto">Расчёт по строкам на следующей странице.</p></section>');
     var est = '<div class="est"><div class="est__group">Материалы</div>' +
-      z.materials.map(function (m) { return '<div class="est__row"><div><div class="nm">' + esc(m.client_name) + '</div><div class="calc">' + m.qty_str + ' ' + esc(m.unit) + ' × ' + m.price_str + ' ₸</div></div><div class="sum">' + m.sum_str + ' ₸</div></div>'; }).join('') +
-      '<div class="est__total"><span>Материалы</span><span>' + z.materials_total_str + ' ₸</span></div><div class="est__group">Работы</div>' +
-      z.works.map(function (w) { return '<div class="est__row"><div><div class="nm">' + esc(w.name) + '</div><div class="calc">' + w.qty_str + ' м² × ' + w.price_str + ' ₸</div></div><div class="sum">' + w.sum_str + ' ₸</div></div>'; }).join('') +
-      '<div class="est__total"><span>Работы</span><span>' + z.works_total_str + ' ₸</span></div>' +
+      z.system_materials.map(function (m) { return estRow(esc(m.client_name), m.qty_str + ' ' + esc(m.unit) + ' × ' + m.price_str + ' ₸', m.sum_str); }).join('') +
+      '<div class="est__group">Работы</div>' +
+      z.system_works.map(function (w) { return estRow(esc(w.name), w.qty_str + ' м² × ' + w.price_str + ' ₸', w.sum_str); }).join('') +
+      (z.has_addons ? '<div class="est__total"><span>Конструкция пола</span><span>' + z.system_total_str + ' ₸</span></div><div class="est__total"><span>Подготовка и дополнительно</span><span>' + z.addons_total_str + ' ₸</span></div>' : '') +
       '<div class="est__total grand"><span>Итого</span><span>' + z.total_str + ' ₸</span></div>' +
       '<div class="est__total per"><span>За квадратный метр</span><span>' + z.per_m2_str + ' ₸</span></div></div>';
-    s.push('<section class="page">' + rh(c, 'estimate') + '<h2>Расчёт</h2>' + est + '<p class="muted small" style="margin-top:auto">Количество материала: площадь ' + z.area_str + ' м² × расход по техлистам.</p></section>');
+    s.push('<section class="page">' + rh(c, 'estimate') + '<h2>Расчёт</h2>' + est + '<p class="muted small" style="margin-top:auto">Количество материала: площадь ' + z.area_str + ' м² × расход по техлистам.' + (z.has_addons ? ' Подготовка основания на следующей странице.' : '') + '</p></section>');
+    z.prep_pages.forEach(function (pp, pi) {
+      var last = pi === z.prep_pages.length - 1;
+      var prep = '<div class="est">' + pp.blocks.map(function (b) {
+        return '<div class="est__group">' + esc(b.title) + ' · ' + b.qty_str + ' ' + esc(b.unit) + '</div><p class="muted small">' + esc(b.client_text) + '</p>' +
+          b.materials.map(function (m) { return estRow(esc(m.client_name), m.qty_str + ' ' + esc(m.unit) + ' × ' + m.price_str + ' ₸', m.sum_str); }).join('') +
+          b.works.map(function (w) { return estRow(esc(w.name), w.qty_str + ' ' + esc(w.unit) + ' × ' + w.price_str + ' ₸', w.sum_str); }).join('') +
+          '<div class="est__total"><span>Итого: ' + esc(b.short) + '</span><span>' + b.subtotal_str + ' ₸</span></div>';
+      }).join('') + (last ? '<div class="est__total grand"><span>Подготовка и дополнительно</span><span>' + z.addons_total_str + ' ₸</span></div>' : '') + '</div>';
+      var title = 'Подготовка и дополнительно' + (z.prep_pages.length > 1 ? ' (' + (pi + 1) + '/' + z.prep_pages.length + ')' : '');
+      s.push('<section class="page">' + rh(c, pp.key) + '<h2>' + title + '</h2>' + prep + '<p class="muted small" style="margin-top:auto">Объём ремонта уточняется при осмотре основания.</p></section>');
+    });
     if (c.alternatives.length) {
       var opt = function (zz, tag, main) {
         return '<div class="opt' + (main ? ' opt--main" style="margin-top:12px' : '') + '"><div class="opt__tag">' + tag + '</div><div class="opt__title">' + esc(zz.system.title) + '</div>' +
@@ -316,15 +429,20 @@
     var c = ctx, k = ctx.kp, z = ctx.zone;
     var rows = '';
     rows += '<tr class="zone"><td colspan="6">' + esc(z.name) + '</td></tr><tr class="grp"><td colspan="6">Работа</td></tr>';
-    z.works.forEach(function (w) { rows += '<tr><td class="c">' + w.n + '</td><td>' + esc(w.name) + '</td><td class="c">м²</td><td class="r">' + w.qty_str + '</td><td class="r">' + w.price_str + '</td><td class="r">' + w.sum_str + '</td></tr>'; });
+    z.works.forEach(function (w) {
+      rows += '<tr><td class="c">' + w.n + '</td><td>' + (w.kind === 'addon' ? esc(w.addon_title) + ': ' : '') + esc(w.name) + '</td><td class="c">' + (w.unit === 'м.п.' ? 'м.п.' : 'м²') + '</td><td class="r">' + w.qty_str + '</td><td class="r">' + w.price_str + '</td><td class="r">' + w.sum_str + '</td></tr>';
+    });
     rows += '<tr class="sum"><td colspan="5">ИТОГО работы :</td><td class="r">' + z.works_total_str + '</td></tr><tr class="grp"><td colspan="6">Материалы</td></tr>';
-    z.materials.forEach(function (m) { rows += '<tr><td class="c">' + m.n + '</td><td>' + esc(m.name) + ', расход ' + m.rate_str + ' ' + esc(m.unit) + '/м²</td><td class="c">' + esc(m.unit) + '</td><td class="r">' + m.qty_str + '</td><td class="r">' + m.price_str + '</td><td class="r">' + m.sum_str + '</td></tr>'; });
+    z.materials.forEach(function (m) {
+      var per = (m.kind === 'addon' && m.per_unit === 'м.п.') ? 'м.п.' : 'м²';
+      rows += '<tr><td class="c">' + m.n + '</td><td>' + (m.kind === 'addon' ? esc(m.addon_title) + ': ' : '') + esc(m.name) + ', расход ' + m.rate_str + ' ' + esc(m.unit) + '/' + per + '</td><td class="c">' + esc(m.unit) + '</td><td class="r">' + m.qty_str + '</td><td class="r">' + m.price_str + '</td><td class="r">' + m.sum_str + '</td></tr>';
+    });
     rows += '<tr class="sum"><td colspan="5">ИТОГО материалы</td><td class="r">' + z.materials_total_str + '</td></tr>' +
       '<tr class="grand"><td colspan="5">ИТОГО по ' + esc(z.name_dat) + ':</td><td class="r">' + z.total_str + '</td></tr>' +
       '<tr class="per"><td colspan="5">стоимость 1 м² по ' + esc(z.name_dat) + ':</td><td class="r">' + z.per_m2_str + '</td></tr>';
     return '<div class="a4"><div class="head"><div class="head__name">' + esc(c.company.legal_name) + '</div><div class="head__addr">' + esc(c.company.address) + ' · тел. ' + esc(c.company.phone_office) + '</div></div>' +
       '<div class="to">' + esc(k.addressee) + '</div><div class="title">Коммерческое предложение<br>на работы по устройству полимерного покрытия</div>' +
-      '<div class="num">№ ' + esc(k.number) + ' от ' + k.date_dmy + ' · ' + esc(k.client.object) + (k.client.city ? ', ' + esc(k.client.city) : '') + '</div>' +
+      '<div class="num">№ ' + esc(k.number) + ' от ' + k.date_dmy + ' · ' + esc(k.client.object) + (k.client.city ? ', ' + esc(k.client.city) : '') + ' · ' + esc(z.system.title) + (z.th_str ? ', ' + z.th_str : '') + '</div>' +
       '<table><thead><tr><th>№</th><th>Наименование работ</th><th>Ед. изм.</th><th>Кол-во</th><th>Цена ед.</th><th>Сумма в тенге</th></tr></thead><tbody>' + rows + '</tbody></table>' +
       '<p class="terms">' + esc(c.company.terms.advance) + '</p>' +
       '<p class="legal">Цены действительны до ' + k.valid_until_dmy + '. ' + esc(c.company.terms.not_offer) + (c.vat_note ? ' ' + esc(c.vat_note) : '') + '</p>' +
@@ -334,8 +452,8 @@
     var k = ctx.kp, z = ctx.zone;
     return 'Здравствуйте, это Kaztop.\nРасчёт по вашему объекту: ' + k.client.object + ', ' + z.area_str + ' м².\nВ файле: конструкция пола, стоимость за м² и итого, что входит.\nЦена действует до ' + k.valid_until_dmy + '.\nВопросы и выезд на объект: ответьте сюда.\n';
   }
-  function perM2Label(system, materials) { return fmtInt(calcZone('1', system, materials, 'excel').per_m2); }
+  function perM2Label(system, data) { return fmtInt(calcZone('1', system, data.materials, 'excel', { data: data }).per_m2); }
 
   return { calcZone: calcZone, layersSvg: layersSvg, buildContext: buildContext, renderPhone: renderPhone, renderA4: renderA4, renderWa: renderWa,
-    perM2Label: perM2Label, fmt: { dmy: dmy, dateWords: dateWords, addDays: addDays, todayIso: todayIso, fmtInt: fmtInt, fmtScaled: fmtScaled, parseDec: parseDec }, esc: esc, NB: NB };
+    perM2Label: perM2Label, fmt: { dmy: dmy, dateWords: dateWords, addDays: addDays, todayIso: todayIso, fmtInt: fmtInt, fmtScaled: fmtScaled, parseDec: parseDec, fmtRate: fmtRate }, esc: esc, NB: NB };
 });

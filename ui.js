@@ -5,7 +5,6 @@
   var state = { data: null, ctx: null, kp: null, pdf: null, busy: false };
   var PW_KEY = 'kp_web_password';
   var SCALE_PHONE = 3, SCALE_A4 = 2, JPEG_Q = 0.86;
-  var BASE_OPTIONS = ['уточняется при выезде', 'новый бетон', 'старый бетон с дефектами', 'другое покрытие, нужен демонтаж'];
 
   function show(id) { ['lock', 'form', 'result'].forEach(function (s) { $('#' + s).hidden = s !== id; }); window.scrollTo(0, 0); }
   function status(msg, kind) { var el = $('#status'); el.textContent = msg || ''; el.className = 'status' + (kind ? ' status--' + kind : ''); }
@@ -41,14 +40,61 @@
     return 'KP-' + yymmdd + '-' + String(n).padStart(2, '0');
   }
   function bumpNumber(number) { var m = /^KP-(\d{6})-(\d+)$/.exec(number); if (m) { var key = 'kp_counter_' + m[1]; var n = parseInt(m[2], 10); if (n > parseInt(localStorage.getItem(key) || '0', 10)) localStorage.setItem(key, String(n)); } }
+  function systemsFor(room) {
+    var d = state.data;
+    return Object.keys(d.systems).filter(function (id) { var s = d.systems[id]; return s.priced && s.room_types.indexOf(room) >= 0; });
+  }
+  function systemLabel(id) {
+    var s = state.data.systems[id];
+    return s.short + ' · ' + s.standard + ' · ' + KP.perM2Label(s, state.data) + ' ₸/м²' + (s.th_mm ? ' · ' + s.th_mm.min + '-' + s.th_mm.max + ' мм' : '');
+  }
+  function fillSystems() {
+    var room = $('#f-room').value;
+    var ids = systemsFor(room);
+    var current = $('#f-system').value;
+    fillSelect($('#f-system'), ids.map(function (id) { return [id, systemLabel(id)]; }), ids.indexOf(current) >= 0 ? current : ids[0]);
+    fillAlt();
+    fillThickness();
+  }
+  function fillAlt() {
+    var room = $('#f-room').value, chosen = $('#f-system').value, current = $('#f-alt').value;
+    var ids = systemsFor(room).filter(function (id) { return id !== chosen; });
+    fillSelect($('#f-alt'), [['', 'нет']].concat(ids.map(function (id) { return [id, state.data.systems[id].short + ' · ' + state.data.systems[id].standard]; })), ids.indexOf(current) >= 0 ? current : '');
+  }
+  function fillThickness() {
+    var s = state.data.systems[$('#f-system').value]; var wrap = $('#f-th').closest('.field');
+    if (!s.th_mm) { wrap.hidden = true; $('#f-th').value = ''; return; }
+    wrap.hidden = false;
+    $('#f-th').min = s.th_mm.min; $('#f-th').max = s.th_mm.max; $('#f-th').step = '0.1'; $('#f-th').value = s.th_mm.default;
+    $('#f-th-range').textContent = s.th_mm.min + '-' + s.th_mm.max + ' мм';
+  }
+  function fillAddons() {
+    var d = state.data; var box = $('#addons'); box.innerHTML = '';
+    Object.keys(d.addons).forEach(function (id) {
+      var a = d.addons[id];
+      var row = document.createElement('div'); row.className = 'addon';
+      var lab = document.createElement('label'); lab.className = 'check';
+      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = id; cb.id = 'ad-' + id;
+      lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + a.title + (a.unit === 'м²' ? ' (по площади)' : '')));
+      row.appendChild(lab);
+      if (a.unit === 'м.п.') {
+        var q = document.createElement('input'); q.type = 'text'; q.inputMode = 'decimal'; q.placeholder = 'длина, м.п.'; q.id = 'adq-' + id; q.className = 'qty';
+        row.appendChild(q);
+      }
+      box.appendChild(row);
+    });
+  }
+  function applyBaseSuggestion() {
+    var base = state.data.base_conditions[$('#f-base').value];
+    Object.keys(state.data.addons).forEach(function (id) { $('#ad-' + id).checked = base.suggest.indexOf(id) >= 0; });
+  }
   function fillForm() {
     var d = state.data;
-    var rooms = Object.keys(d.rooms.rooms).map(function (k) { return [k, d.rooms.rooms[k].short]; });
+    var rooms = Object.keys(d.rooms.rooms).filter(function (k) { return systemsFor(k).length; }).map(function (k) { return [k, d.rooms.rooms[k].short]; });
     fillSelect($('#f-room'), rooms, 'warehouse');
-    var systems = Object.keys(d.systems).filter(function (id) { return d.systems[id].priced; });
-    fillSelect($('#f-system'), systems.map(function (id) { return [id, d.systems[id].short + ' · ' + KP.perM2Label(d.systems[id], d.materials) + ' ₸/м²']; }), systems[0]);
-    fillSelect($('#f-alt'), [['', 'нет']].concat(systems.map(function (id) { return [id, d.systems[id].short]; })), '');
-    fillSelect($('#f-base'), BASE_OPTIONS.map(function (b) { return [b, b]; }), BASE_OPTIONS[0]);
+    fillSelect($('#f-base'), Object.keys(d.base_conditions).map(function (k) { return [k, d.base_conditions[k].label]; }), 'unknown');
+    fillAddons();
+    fillSystems();
     fillSelect($('#f-ral'), d.palette.basics.map(function (c) { return [c.ral, c.ral + ' · ' + c.name]; }), 'RAL 7035');
     var managers = Object.keys(d.company.managers);
     fillSelect($('#f-manager'), managers.map(function (k) { return [k, d.company.managers[k].name]; }), managers[0]);
@@ -64,19 +110,36 @@
     if (!/^\d+(\.\d{1,2})?$/.test(area) || Number(area) <= 0) throw new Error('Площадь: число больше нуля, не больше двух знаков после запятой.');
     var object = $('#f-object').value.trim(); if (!object) throw new Error('Заполните «Что за помещение».');
     var company = $('#f-company').value.trim() || object;
-    var alt = $('#f-alt').value; var system = $('#f-system').value;
-    if (alt === system) alt = '';
+    var system = $('#f-system').value; var sys = state.data.systems[system];
+    var alt = $('#f-alt').value; if (alt === system) alt = '';
     var text = [object, company, $('#f-city').value].join(' ');
     if (/(\+7|\b8)[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}/.test(text) || /@/.test(text)) throw new Error('В КП не должно быть телефонов и почты клиента: уберите их из полей.');
+    var zone = { name: 'Тип пола 1', area_m2: area, system: system, addons: [] };
+    if (sys.th_mm) {
+      var th = $('#f-th').value.trim().replace(',', '.');
+      if (!/^\d+(\.\d{1,2})?$/.test(th)) throw new Error('Толщина: число в миллиметрах, например 2.5.');
+      if (Number(th) < Number(sys.th_mm.min) || Number(th) > Number(sys.th_mm.max)) throw new Error('Толщина для этой конструкции: от ' + sys.th_mm.min + ' до ' + sys.th_mm.max + ' мм.');
+      zone.th_mm = th;
+    }
+    Object.keys(state.data.addons).forEach(function (id) {
+      if (!$('#ad-' + id).checked) return;
+      var a = state.data.addons[id]; var item = { id: id };
+      if (a.unit === 'м.п.') {
+        var q = $('#adq-' + id).value.trim().replace(',', '.');
+        if (!/^\d+(\.\d{1,2})?$/.test(q) || Number(q) <= 0) throw new Error('«' + a.title + '»: укажите длину в м.п.');
+        item.qty = q;
+      }
+      zone.addons.push(item);
+    });
     return {
       number: number, date: KP.fmt.todayIso(), valid_until: null,
       client: { company: company, object: object, city: $('#f-city').value.trim() || null, addressee: null },
-      room_type: $('#f-room').value, manager: $('#f-manager').value,
-      zones: [{ name: 'Тип пола 1', area_m2: area, system: system }],
+      room_type: $('#f-room').value, manager: $('#f-manager').value, base: $('#f-base').value,
+      zones: [zone],
       alternatives: alt ? [{ system: alt }] : [],
       colour: { ral: $('#f-ral').value },
       options: { show_cover_price: false, show_comparison: !!alt, show_colour_page: $('#f-colour').checked, a4_separate: false, rounding: 'excel' },
-      notes: [$('#f-base').value], status: 'web',
+      notes: [], status: 'web',
     };
   }
 
@@ -94,14 +157,15 @@
     $('#pages').innerHTML = KP.renderPhone(ctx);
     $('#a4').innerHTML = KP.renderA4(ctx);
     $('#pages').style.height = '';
-    $('#r-title').textContent = kp.number + ' · ' + kp.client.object + ' · ' + ctx.zone.area_str + ' м²';
+    $('#r-title').textContent = kp.number + ' · ' + kp.client.object + ' · ' + ctx.zone.area_str + ' м²' + (ctx.zone.th_str ? ' · ' + ctx.zone.th_str : '');
     $('#b-share').hidden = !(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.pdf', { type: 'application/pdf' })] }));
     show('result');
     fitPages();
-    status('Проверьте страницы и нажмите «Скачать PDF».');
     var over = [];
     document.querySelectorAll('#pages .page').forEach(function (p, i) { if (p.scrollHeight > p.clientHeight + 1) over.push(i + 1); });
     if (over.length) status('Текст не влезает на страницы ' + over.join(', ') + ': сократите название помещения или компании.', 'warn');
+    else if (ctx.zone.estimated.length) status('Оценочные цены (согласуйте с руководителем): ' + ctx.zone.estimated.join(', ') + '.', 'warn');
+    else status('Проверьте страницы и нажмите «Скачать PDF».');
   }
 
   // ---------- PDF ----------
@@ -176,7 +240,10 @@
       ev.preventDefault(); $('#lock-error').textContent = '';
       try { await unlock($('#password').value); } catch (e) { $('#lock-error').textContent = e.message; }
     });
-    $('#kp-form').addEventListener('submit', function (ev) { ev.preventDefault(); try { build(); } catch (e) { $('#form-error').textContent = e.message; } });
+    $('#kp-form').addEventListener('submit', function (ev) { ev.preventDefault(); $('#form-error').textContent = ''; try { build(); } catch (e) { $('#form-error').textContent = e.message; } });
+    $('#f-room').addEventListener('change', fillSystems);
+    $('#f-system').addEventListener('change', function () { fillAlt(); fillThickness(); });
+    $('#f-base').addEventListener('change', applyBaseSuggestion);
     $('#b-download').addEventListener('click', download);
     $('#b-share').addEventListener('click', share);
     $('#b-copy').addEventListener('click', copyText);

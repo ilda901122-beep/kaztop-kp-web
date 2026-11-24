@@ -33,8 +33,14 @@
     </div>
     <label class="field"><span>Тип помещения</span><select id="f-room"></select></label>
     <label class="field"><span>Конструкция пола</span><select id="f-system"></select></label>
-    <label class="field"><span>Показать вариант для сравнения</span><select id="f-alt"></select></label>
+    <label class="field"><span>Толщина, мм <small id="f-th-range" class="muted-inline"></small></span><input id="f-th" type="number" inputmode="decimal" step="0.1"></label>
     <label class="field"><span>Основание</span><select id="f-base"></select></label>
+    <fieldset class="fieldset">
+      <legend>Подготовка основания и дополнительно</legend>
+      <div id="addons"></div>
+      <p class="hint">Для позиций в м.п. укажите длину. Выбор основания отмечает подходящие позиции, их можно снять.</p>
+    </fieldset>
+    <label class="field"><span>Показать вариант для сравнения</span><select id="f-alt"></select></label>
     <div class="row">
       <label class="field"><span>Цвет RAL</span><select id="f-ral"></select></label>
       <label class="field"><span>Номер КП</span><input id="f-number" type="text" required></label>
