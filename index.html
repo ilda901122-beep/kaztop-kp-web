@@ -68,18 +68,15 @@
       <button type="button" id="b-pdf" class="primary">Получить PDF</button>
     </div>
     <div id="act-ready" class="actions" hidden>
-      <div id="linkbox" class="linkbox" hidden><span class="linkbox__label">Ссылка на PDF</span><a id="pdf-link" href="#" target="_blank" rel="noopener"></a><button type="button" id="b-link-copy">Копировать</button></div>
       <button type="button" id="b-chief" class="primary">Отправить руководителю</button>
-      <button type="button" id="b-share" hidden>Поделиться файлом</button>
+      <button type="button" id="b-client">Отправить клиенту</button>
       <a id="b-download" class="btn-a" href="#" download>Скачать PDF</a>
-      <button type="button" id="b-retry" class="wide" hidden>Сохранить в историю ещё раз</button>
     </div>
     <div class="actions actions--minor">
       <button type="button" id="b-edit">Изменить</button>
-      <button type="button" id="b-copy">Текст для клиента</button>
     </div>
     <p id="status" class="status" role="status"></p>
-    <p id="dl-hint" class="hint hint--small" hidden>Если вместо файла открылась ссылка вида blob:, нажмите «Поделиться файлом» или откройте ссылку на PDF.</p>
+    <p id="dl-hint" class="hint hint--small" hidden>«Отправить» открывает выбор: WhatsApp, почта или «Сохранить в Файлы». Если «Скачать PDF» открыл адрес blob:, сохраните файл так.</p>
     <textarea id="wa-text" class="wa-text" rows="5" readonly hidden></textarea>
   </div>
   <div class="preview"><div id="pages" class="pages"></div></div>
@@ -88,8 +85,8 @@
 
 <section id="history" class="screen" hidden>
   <div class="panel">
-    <div class="h-head"><h1>История КП</h1><div class="h-tools"><button type="button" id="b-h-csv" class="small-btn">Таблица</button><button type="button" id="b-h-refresh" class="small-btn">Обновить</button></div></div>
-    <p id="h-note" class="hint"></p>
+    <div class="h-head"><h1>История КП</h1><div class="h-tools"><button type="button" id="b-h-csv" class="small-btn">Таблица</button></div></div>
+    <p id="h-note" class="hint">КП с этого устройства: расчёт и что менялось. Сами PDF - в WhatsApp, куда их отправили.</p>
     <input id="h-search" class="search" type="search" placeholder="Номер, объект, город, менеджер" autocomplete="off">
     <p id="h-status" class="status" role="status"></p>
     <div id="h-list" class="h-list"></div>
@@ -99,7 +96,6 @@
 <script src="vendor/html2canvas.min.js"></script>
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="app.js"></script>
-<script src="history.js"></script>
 <script src="ui.js"></script>
 </body>
 </html>

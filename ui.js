@@ -1,6 +1,6 @@
 /* Интерфейс веб-версии: пароль и расшифровка данных, форма, предпросмотр, PDF в браузере (html2canvas + jsPDF),
-   общая история выгрузок (history.js: релей ntfy.sh + архив в ветке history) или история этого устройства,
-   ред. КП с перечнем изменений, статусы «согласовано» / «отправлено клиенту», выгрузка таблицы. */
+   история КП на этом устройстве (ред. с перечнем изменений, таблица CSV), отправка PDF руководителю и клиенту.
+   Внешних сервисов нет: расчёт, PDF и история - в браузере, файлы уходят через WhatsApp. */
 (function () {
   'use strict';
   var $ = function (s) { return document.querySelector(s); };
@@ -8,13 +8,12 @@
     data: null, ctx: null, kp: null, pdf: null, pdfUrl: null, busy: false,
     editing: null,   // запись КП, которую меняем: следующая сборка станет её новой ред.
     saved: null,     // запись последнего сохранённого PDF
-    draftUid: null, history: [], files: {}, suggested: null, cfg: undefined,
+    draftUid: null, history: [],
   };
   var PW_KEY = 'kp_web_password', LOCAL_KEY = 'kp_history_local', LOCAL_LIMIT = 60;
-  // Растр страниц: от чёткого к лёгкому, пока PDF не станет меньше 2 МБ (лимит файла в релее общей истории)
+  // Растр страниц: от чёткого к лёгкому, пока PDF не станет меньше 2 МБ (файл быстро уходит в WhatsApp по мобильной связи)
   var PDF_PRESETS = [[3, 2, 0.86], [2.5, 1.8, 0.8], [2, 1.6, 0.74]], PDF_LIMIT = 2000000;
   var SCREENS = ['lock', 'form', 'result', 'history'];
-  var STATUS_NEXT = { 'создано': ['согласовано'], 'согласовано': ['отправлено клиенту'] };
 
   function show(id) {
     SCREENS.forEach(function (s) { $('#' + s).hidden = s !== id; });
@@ -27,7 +26,6 @@
   function status(msg, kind) { var el = $('#status'); el.textContent = msg || ''; el.className = 'status' + (kind ? ' status--' + kind : ''); }
   function hStatus(msg, kind) { var el = $('#h-status'); el.textContent = msg || ''; el.className = 'status' + (kind ? ' status--' + kind : ''); }
   function esc(s) { return KP.esc(s); }
-  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
   // ---------- данные ----------
   function b64(s) { return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); }); }
@@ -48,17 +46,13 @@
     state.data = data;
     localStorage.setItem(PW_KEY, password);
     state.draftUid = newUid();
+    loadHistory();
     fillForm();
     updateFormMode();
     show('form');
-    loadHistory().then(suggestNumber).catch(function () { /* нет связи: номер остаётся по счётчику устройства */ });
   }
 
-  // ---------- история: сервер или это устройство ----------
-  function historyCfg() {
-    if (state.cfg === undefined) state.cfg = state.data && window.KPH ? KPH.config(state.data.history) : null;
-    return state.cfg;
-  }
+  // ---------- история на этом устройстве ----------
   function newUid() {
     var a = new Uint8Array(12); crypto.getRandomValues(a);
     return Array.prototype.map.call(a, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
@@ -69,21 +63,9 @@
     list.unshift(rec);
     localStorage.setItem(LOCAL_KEY, JSON.stringify(list.slice(0, LOCAL_LIMIT)));
   }
-  async function loadHistory() {
-    var cfg = historyCfg();
-    if (!cfg) { state.history = localHistory(); return state.history; }
-    var out = await KPH.load(cfg);
-    state.history = out.records.filter(function (r) { return !r.test; });
-    state.files = out.files;
-    return state.history;
-  }
-  function pdfLink(r) { var cfg = historyCfg(); return cfg && r && r.pdf ? KPH.viewerUrl(cfg, r.pdf, location.href) : ''; }
-  function timeOf(r) { return r.time ? Number(r.time) : (Date.parse(r.created_at || '') / 1000 || 0); }
-  var WHEN_FMT = (function () { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return null; } })();
-  function whenOf(r) {
-    if (r.time && WHEN_FMT) return WHEN_FMT.format(new Date(r.time * 1000)).replace(',', '');
-    return fmtWhen(r.created_at);
-  }
+  function loadHistory() { state.history = localHistory(); return state.history; }
+  function timeOf(r) { return Date.parse(r.created_at || '') || 0; }
+  function whenOf(r) { return fmtWhen(r.created_at); }
   function latestRevision(uid) {
     var max = 0;
     state.history.concat(state.saved ? [state.saved] : []).forEach(function (r) { if (r.uid === uid) max = Math.max(max, Number(r.revision) || 1); });
@@ -98,11 +80,6 @@
     var n = parseInt(localStorage.getItem('kp_counter_' + yymmdd) || '0', 10);
     state.history.forEach(function (r) { var m = /^KP-(\d{6})-(\d+)$/.exec(r.number || ''); if (m && m[1] === yymmdd) n = Math.max(n, parseInt(m[2], 10)); });
     return 'KP-' + yymmdd + '-' + String(n + 1).padStart(2, '0');
-  }
-  function suggestNumber() {
-    if (state.editing) return;
-    var f = $('#f-number');
-    if (!f.value || f.value === state.suggested) { state.suggested = nextNumber(); f.value = state.suggested; }
   }
   function bumpNumber(number) { var m = /^KP-(\d{6})-(\d+)$/.exec(number); if (m) { var key = 'kp_counter_' + m[1]; var n = parseInt(m[2], 10); if (n > parseInt(localStorage.getItem(key) || '0', 10)) localStorage.setItem(key, String(n)); } }
   function systemsFor(room) {
@@ -166,8 +143,7 @@
     var managers = Object.keys(d.company.managers);
     fillSelect($('#f-manager'), managers.map(function (k) { return [k, d.company.managers[k].name]; }), managers[0]);
     $('#f-manager').closest('.field').hidden = managers.length < 2;
-    state.suggested = nextNumber();
-    $('#f-number').value = state.suggested;
+    $('#f-number').value = nextNumber();
     $('#f-valid').textContent = d.company.terms.valid_days;
   }
   function fillFromParams(p) {
@@ -350,17 +326,7 @@
     if (state.pdfUrl) URL.revokeObjectURL(state.pdfUrl);
     state.pdfUrl = URL.createObjectURL(f);
     var a = $('#b-download'); a.href = state.pdfUrl; a.setAttribute('download', f.name);
-    $('#b-share').hidden = !canShareFiles();
-    $('#linkbox').hidden = true; $('#b-retry').hidden = true;
     setStep('ready');
-  }
-  function fileToB64(file) {
-    return new Promise(function (resolve, reject) {
-      var r = new FileReader();
-      r.onload = function () { resolve(String(r.result).split(',')[1]); };
-      r.onerror = function () { reject(new Error('не удалось прочитать PDF')); };
-      r.readAsDataURL(file);
-    });
   }
   function nowIso() { var d = new Date(); var p = function (n) { return String(n).padStart(2, '0'); }; return KP.fmt.todayIso() + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
   function fmtNum(s) {
@@ -399,14 +365,10 @@
       area: kp.zones[0].area_m2, system: z.system.id, system_title: z.system.short, th_mm: (z.th_mm || '').replace(',', '.'),
       base_label: ctx.kp.base_note, addons: addonsText(z), alt: kp.alternatives.length ? d.systems[kp.alternatives[0].system].short : '',
       total: z.calc.total.toString(), per_m2: z.calc.per_m2.toString(), estimated: z.estimated.join(', '),
-      params: kp, test: !!window.__kpTest,
+      params: kp,
     };
     rec.changes = state.editing ? diffText(state.editing, rec) : '';
     return rec;
-  }
-  function showLink(url) {
-    $('#pdf-link').href = url; $('#pdf-link').textContent = url.replace(/^https?:\/\//, '');
-    $('#linkbox').hidden = !url;
   }
   function afterSaved(rec) {
     state.saved = rec; state.editing = rec;
@@ -414,59 +376,12 @@
     bumpNumber(rec.number);
     updateFormMode();
   }
-  function nextFree(number) {
-    var m = /^KP-(\d{6})-(\d+)$/.exec(number);
-    var n = parseInt(localStorage.getItem('kp_counter_' + m[1]) || '0', 10);
-    state.history.forEach(function (r) { var x = /^KP-(\d{6})-(\d+)$/.exec(r.number || ''); if (x && x[1] === m[1]) n = Math.max(n, parseInt(x[2], 10)); });
-    return 'KP-' + m[1] + '-' + String(Math.max(n, parseInt(m[2], 10)) + 1).padStart(2, '0');
-  }
-  /** Номер занят другим КП или ред. уже есть: правим перед отправкой (PDF пересобирается). */
-  function resolveConflicts() {
-    var k = state.kp, changed = false;
-    if (state.history.some(function (r) { return r.number === k.number && r.uid !== k.uid; })) {
-      k.number = nextFree(k.number); changed = true;
-      if (!state.editing) $('#f-number').value = k.number;
-    }
-    var latest = latestRevision(k.uid);
-    if (k.revision <= latest) { k.revision = latest + 1; changed = true; }
-    return changed;
-  }
-  async function saveToHistory() {
-    var cfg = historyCfg();
-    if (!cfg) {
-      var local = buildRecord();
-      local.created_at = nowIso(); local.status = 'создано';
-      pushLocal(local);
-      afterSaved(local);
-      status('PDF готов. Общая история не подключена: запись сохранена только на этом устройстве.', 'warn');
-      return local;
-    }
-    try {
-      status('Сверяю номер с общей историей…');
-      try { await loadHistory(); } catch (e) { /* нет свежей истории: проверка по тому, что уже загружено */ }
-      if (resolveConflicts()) {
-        status('Номер или ред. уже заняты, собираю PDF заново как ' + state.kp.number + (state.kp.revision > 1 ? ' ред. ' + state.kp.revision : '') + '…', 'warn');
-        render();
-        readyPdf(await makePdf());
-      }
-      status('Отправляю PDF в общую историю…');
-      var pdf = await KPH.publishPdf(cfg, state.pdf);
-      var rec = buildRecord();
-      rec.pdf = pdf;
-      status('Сохраняю запись…');
-      var res = await KPH.publish(cfg, { t: 'kp', rec: rec });
-      rec.msg = res.id; rec.time = res.time; rec.status = 'создано';
-      pushLocal(rec);
-      afterSaved(rec);
-      showLink(pdfLink(rec));
-      $('#b-retry').hidden = true;
-      status('PDF сохранён в общей истории: ссылку можно отправить руководителю, она откроется без пароля.', 'ok');
-      return rec;
-    } catch (e) {
-      $('#b-retry').hidden = false;
-      status('PDF готов, но в историю не сохранился: ' + e.message + '. Файл можно скачать или нажать «Сохранить в историю ещё раз».', 'err');
-      return null;
-    }
+  function saveToHistory() {
+    var rec = buildRecord();
+    rec.created_at = nowIso();
+    pushLocal(rec);
+    afterSaved(rec);
+    return rec;
   }
   async function getPdf() {
     if (state.busy) return null;
@@ -480,26 +395,26 @@
     var k = state.kp, z = state.ctx.zone, s = state.saved;
     return 'КП ' + k.number + (k.revision > 1 ? ' ред. ' + k.revision : '') + ' на согласование: ' + k.client.object + (k.client.city ? ', ' + k.client.city : '') + ', ' +
       z.area_str + ' м², ' + z.total_str + ' ₸ (' + z.per_m2_str + ' ₸/м²).' +
-      (s && s.changes ? '\nИзменено: ' + s.changes : '') + (s && s.pdf ? '\nPDF: ' + pdfLink(s) : '');
+      (s && s.changes ? '\nИзменено: ' + s.changes : '');
   }
-  async function copy(text, okMsg, report) {
-    try { await navigator.clipboard.writeText(text); report(okMsg, 'ok'); return true; }
-    catch (e) { window.prompt('Скопируйте:', text); return false; }
+  function writeClipboard(text) {
+    try { return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; }); }
+    catch (e) { return Promise.resolve(false); }
   }
-  function sendToChief() {
-    var text = chiefText();
-    if (state.saved && state.saved.pdf) { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener'); return; }
-    if (canShareFiles()) { navigator.share({ files: [state.pdf], text: text }).catch(function (e) { if (e && e.name !== 'AbortError') status('Отправить не удалось: ' + e.message, 'err'); }); return; }
-    copy(text, 'Текст для руководителя скопирован. Файл скачайте кнопкой «Скачать PDF» и приложите.', status);
+  /** WhatsApp на iPhone при отправке «файл + текст» может отправить только текст (WebKit bug 251500), поэтому файл
+      уходит один, а текст в том же нажатии (до share) кладётся в буфер обмена: его вставляют подписью к файлу. */
+  function sendPdf(text, who) {
+    var copied = writeClipboard(text);
+    var share = canShareFiles();
+    if (share) navigator.share({ files: [state.pdf] }).catch(function (e) { if (e && e.name !== 'AbortError') status('Отправить не удалось: ' + e.message + '. Скачайте PDF и приложите к сообщению.', 'err'); });
+    copied.then(function (ok) {
+      $('#wa-text').value = text; $('#wa-text').hidden = ok;
+      var how = share ? 'вставьте его подписью к файлу' : 'скачайте PDF, приложите к сообщению и вставьте текст';
+      status(ok ? 'Текст ' + who + ' скопирован: ' + how + '.' : 'Скопируйте текст ниже: ' + how + '.', ok ? 'ok' : 'warn');
+    });
   }
-  function shareFile() {
-    navigator.share({ files: [state.pdf], title: state.pdf.name, text: KP.renderWa(state.ctx) })
-      .catch(function (e) { if (e && e.name !== 'AbortError') status('Поделиться не удалось: ' + e.message, 'err'); });
-  }
-  async function copyClientText() {
-    try { await navigator.clipboard.writeText(KP.renderWa(state.ctx)); status('Текст для клиента скопирован.', 'ok'); }
-    catch (e) { $('#wa-text').hidden = false; $('#wa-text').value = KP.renderWa(state.ctx); }
-  }
+  function sendToChief() { sendPdf(chiefText(), 'для руководителя'); }
+  function sendToClient() { sendPdf(KP.renderWa(state.ctx), 'для клиента'); }
 
   // ---------- экран истории ----------
   function groupHistory(list) {
@@ -508,20 +423,14 @@
     return order.map(function (k) { return groups[k].sort(function (a, b) { return b.revision - a.revision; }); })
       .sort(function (a, b) { return timeOf(b[0]) - timeOf(a[0]); });
   }
-  function statusClass(st) { return { 'согласовано': 'ok', 'отправлено клиенту': 'sent', 'отказ': 'no' }[st] || 'new'; }
   function card(g) {
     var r = g[0], older = g.slice(1), key = esc(r.uid) + '|' + r.revision;
-    var link = pdfLink(r);
-    var actions = (link ? '<a class="hbtn" href="' + esc(link) + '" target="_blank" rel="noopener">Открыть PDF</a><button type="button" class="hbtn" data-act="copy" data-key="' + key + '">Ссылка</button>' : '') +
-      '<button type="button" class="hbtn" data-act="edit" data-key="' + key + '">Изменить</button>' +
-      (historyCfg() ? (STATUS_NEXT[r.status] || []).map(function (st) { return '<button type="button" class="hbtn hbtn--st" data-act="status" data-status="' + st + '" data-key="' + key + '">' + cap(st) + '</button>'; }).join('') : '');
+    var actions = '<button type="button" class="hbtn" data-act="edit" data-key="' + key + '">Изменить</button>';
     var olderHtml = older.length ? '<details class="hcard__older"><summary>Ранние ред. (' + older.length + ')</summary><ul>' + older.map(function (o) {
-      var ol = pdfLink(o);
-      return '<li><b>ред. ' + o.revision + '</b> · ' + whenOf(o) + ' · ' + fmtNum(o.total) + ' ₸' + (ol ? ' · <a href="' + esc(ol) + '" target="_blank" rel="noopener">PDF</a>' : '') +
+      return '<li><b>ред. ' + o.revision + '</b> · ' + whenOf(o) + ' · ' + fmtNum(o.total) + ' ₸' +
         (o.changes ? '<div class="hcard__chg">' + esc(o.changes) + '</div>' : '') + '</li>';
     }).join('') + '</ul></details>' : '';
-    return '<article class="hcard"><div class="hcard__top"><b>' + esc(r.number) + '</b>' + (r.revision > 1 ? ' <span class="muted-inline">ред. ' + r.revision + '</span>' : '') +
-      '<span class="chip chip--' + statusClass(r.status) + '">' + esc(r.status || 'создано') + '</span></div>' +
+    return '<article class="hcard"><div class="hcard__top"><b>' + esc(r.number) + '</b>' + (r.revision > 1 ? ' <span class="muted-inline">ред. ' + r.revision + '</span>' : '') + '</div>' +
       '<div class="hcard__title">' + esc(r.object) + (r.city ? ' · ' + esc(r.city) : '') + '</div>' +
       '<div class="hcard__meta">' + fmtNum(r.area) + ' м² · ' + esc(r.system_title) + (r.th_mm ? ', ' + fmtNum(r.th_mm) + ' мм' : '') + (r.addons ? ' · ' + esc(r.addons) : '') + '</div>' +
       '<div class="hcard__sum"><b>' + fmtNum(r.total) + ' ₸</b> · ' + fmtNum(r.per_m2) + ' ₸/м²' + (r.estimated ? ' · <span class="warn-inline">оценочные цены</span>' : '') + '</div>' +
@@ -537,19 +446,14 @@
     });
     $('#h-list').innerHTML = groups.length ? groups.map(card).join('') : '<p class="hint">' + (q ? 'Ничего не найдено.' : 'Пока пусто: соберите КП и нажмите «Получить PDF».') + '</p>';
   }
-  function historyNote() {
-    $('#h-note').textContent = historyCfg()
-      ? 'Все КП менеджеров: кто, когда, какой расчёт и что менялось. PDF по ссылке открывается без пароля.'
-      : 'Общая история пока не подключена: здесь только КП с этого устройства, без файлов PDF.';
-  }
   function csvCell(v) { var s = v == null ? '' : String(v); return /[;"\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
   /** Таблица всех КП и ред. для Excel или Google Таблиц (разделитель «;», UTF-8 с BOM). */
   function exportCsv() {
     var head = ['Дата', '№ КП', 'Ред.', 'Менеджер', 'Помещение', 'Компания', 'Город', 'Тип помещения', 'Площадь, м²', 'Конструкция', 'Толщина, мм',
-      'Основание', 'Допработы', 'Вариант', 'Итого, ₸', '₸/м²', 'Оценочные цены', 'Что изменилось', 'Статус', 'PDF'];
+      'Основание', 'Допработы', 'Вариант', 'Итого, ₸', '₸/м²', 'Оценочные цены', 'Что изменилось'];
     var rows = state.history.slice().sort(function (a, b) { return timeOf(a) - timeOf(b); }).map(function (r) {
       return [whenOf(r), r.number, r.revision, r.manager_name, r.object, r.company, r.city, r.room, String(r.area || '').replace('.', ','), r.system_title,
-        String(r.th_mm || '').replace('.', ','), r.base_label, r.addons, r.alt, r.total, r.per_m2, r.estimated, r.changes, r.status, pdfLink(r)];
+        String(r.th_mm || '').replace('.', ','), r.base_label, r.addons, r.alt, r.total, r.per_m2, r.estimated, r.changes];
     });
     var csv = '\ufeff' + [head].concat(rows).map(function (row) { return row.map(csvCell).join(';'); }).join('\r\n');
     var a = document.createElement('a');
@@ -558,32 +462,20 @@
     document.body.appendChild(a); a.click(); a.remove();
     hStatus('Таблица выгружена: ' + rows.length + ' строк.', 'ok');
   }
-  async function openHistory() {
+  function openHistory() {
+    loadHistory();
     show('history');
-    historyNote();
     renderHistory();
-    hStatus('Обновляю…');
-    try { await loadHistory(); historyNote(); renderHistory(); hStatus(''); }
-    catch (e) { hStatus('Не удалось загрузить историю: ' + e.message, 'err'); }
+    hStatus('');
   }
   function findRecord(key) {
     var parts = key.split('|');
     return state.history.filter(function (r) { return r.uid === parts[0] && String(r.revision) === parts[1]; })[0] || null;
   }
-  async function onHistoryClick(ev) {
-    var btn = ev.target.closest('button[data-act]'); if (!btn) return;
-    var rec = findRecord(btn.getAttribute('data-key')); if (!rec) return;
-    var act = btn.getAttribute('data-act');
-    if (act === 'edit') { editRecord(rec); return; }
-    if (act === 'copy') { copy(pdfLink(rec), 'Ссылка на PDF ' + rec.number + ' скопирована.', hStatus); return; }
-    if (act === 'status') {
-      var st = btn.getAttribute('data-status');
-      btn.disabled = true;
-      try {
-        await KPH.publish(historyCfg(), { t: 'status', uid: rec.uid, revision: rec.revision, status: st });
-        rec.status = st; renderHistory(); hStatus(rec.number + ': ' + st + '.', 'ok');
-      } catch (e) { btn.disabled = false; hStatus('Статус не изменён: ' + e.message, 'err'); }
-    }
+  function onHistoryClick(ev) {
+    var btn = ev.target.closest('button[data-act=edit]'); if (!btn) return;
+    var rec = findRecord(btn.getAttribute('data-key'));
+    if (rec) editRecord(rec);
   }
 
   // ---------- запуск ----------
@@ -598,19 +490,15 @@
     $('#f-base').addEventListener('change', applyBaseSuggestion);
     $('#b-pdf').addEventListener('click', getPdf);
     $('#b-chief').addEventListener('click', sendToChief);
-    $('#b-share').addEventListener('click', shareFile);
-    $('#b-retry').addEventListener('click', function () { $('#b-retry').hidden = true; saveToHistory(); });
-    $('#b-link-copy').addEventListener('click', function () { copy($('#pdf-link').href, 'Ссылка на PDF скопирована.', status); });
-    $('#b-copy').addEventListener('click', copyClientText);
+    $('#b-client').addEventListener('click', sendToClient);
     $('#b-edit').addEventListener('click', function () { updateFormMode(); show('form'); });
     $('#b-new').addEventListener('click', startNew);
     $('#nav-form').addEventListener('click', function () { if (state.saved || state.editing) startNew(); else show('form'); });
     $('#nav-history').addEventListener('click', openHistory);
-    $('#b-h-refresh').addEventListener('click', openHistory);
     $('#h-search').addEventListener('input', renderHistory);
     $('#h-list').addEventListener('click', onHistoryClick);
     $('#b-h-csv').addEventListener('click', exportCsv);
-    $('#b-logout').addEventListener('click', function () { localStorage.removeItem(PW_KEY); state.data = null; state.cfg = undefined; state.history = []; show('lock'); });
+    $('#b-logout').addEventListener('click', function () { localStorage.removeItem(PW_KEY); state.data = null; state.history = []; show('lock'); });
     window.addEventListener('resize', function () { if (!$('#result').hidden) fitPages(); });
     var saved = localStorage.getItem(PW_KEY);
     if (saved) unlock(saved).catch(function () { localStorage.removeItem(PW_KEY); show('lock'); });
