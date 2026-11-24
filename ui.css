@@ -23,7 +23,7 @@ button { font: inherit; cursor: pointer; }
 .bar-title { font-weight: 700; margin-bottom: 10px; font-size: 15px; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .actions button { border-radius: 11px; padding: 12px 10px; font-size: 15px; font-weight: 700; border: 1px solid rgba(14,28,33,0.18); background: #fff; }
-.actions .primary { grid-column: 1 / -1; border: 0; }
+.actions .primary { grid-column: 1 / -1; border: 0; background: #00afca; color: #fff; }
 .status { font-size: 14px; color: #55656b; margin: 10px 0 0; min-height: 1.2em; }
 .status--ok { color: #0b6b3a; }
 .status--warn { color: #9a6700; }
