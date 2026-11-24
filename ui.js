@@ -67,10 +67,11 @@
       // тело text/plain без своих заголовков: простой запрос без предварительного OPTIONS, как требует Apps Script
       var res = await fetch(h.url, { method: 'POST', body: JSON.stringify(Object.assign({ token: h.token, action: action }, payload || {})), signal: ctrl.signal, redirect: 'follow' });
       if (!res.ok) throw new Error('сервер истории ответил ' + res.status);
-      return await res.json();
+      var text = await res.text();
+      try { return JSON.parse(text); } catch (e) { throw new Error('сервер истории ответил не данными: у развёртывания должен быть доступ «Все»'); }
     } catch (e) {
       if (e.name === 'AbortError') throw new Error('сервер истории не ответил за ' + Math.round(ms / 1000) + ' с');
-      if (e instanceof TypeError) throw new Error('нет связи с сервером истории');
+      if (e instanceof TypeError) throw new Error('нет связи с сервером истории (интернет или доступ развёртывания «Все»)');
       throw e;
     } finally { clearTimeout(timer); }
   }
