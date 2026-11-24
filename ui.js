@@ -46,7 +46,7 @@
   }
   function systemLabel(id) {
     var s = state.data.systems[id];
-    return s.short + ' · ' + s.standard + ' · ' + KP.perM2Label(s, state.data) + ' ₸/м²' + (s.th_mm ? ' · ' + s.th_mm.min + '-' + s.th_mm.max + ' мм' : '');
+    return s.short + ' · ' + KP.perM2Label(s, state.data) + ' ₸/м²' + (s.th_mm ? ' · ' + s.th_mm.min + '-' + s.th_mm.max + ' мм' : '') + ' · ' + s.standard.toLowerCase();
   }
   function fillSystems() {
     var room = $('#f-room').value;
@@ -75,7 +75,9 @@
       var row = document.createElement('div'); row.className = 'addon';
       var lab = document.createElement('label'); lab.className = 'check';
       var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = id; cb.id = 'ad-' + id;
-      lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + a.title + (a.unit === 'м²' ? ' (по площади)' : '')));
+      var label = (a.short || a.title); label = label.charAt(0).toUpperCase() + label.slice(1);
+      lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + label + (a.unit === 'м²' ? ' (по площади)' : '')));
+      lab.title = a.title;
       row.appendChild(lab);
       if (a.unit === 'м.п.') {
         var q = document.createElement('input'); q.type = 'text'; q.inputMode = 'decimal'; q.placeholder = 'длина, м.п.'; q.id = 'adq-' + id; q.className = 'qty';
