@@ -10,7 +10,14 @@
 <link rel="stylesheet" href="ui.css">
 </head>
 <body>
-<header class="top"><span class="top__brand">KAZTOP</span><span class="top__title">Коммерческое предложение</span><button type="button" id="b-logout" class="top__out" title="Выйти">Выйти</button></header>
+<header class="top">
+  <span class="top__brand">KAZTOP</span>
+  <nav id="nav" class="top__nav" hidden>
+    <button type="button" id="nav-form">Новое КП</button>
+    <button type="button" id="nav-history">История</button>
+  </nav>
+  <button type="button" id="b-logout" class="top__out" title="Выйти" hidden>Выйти</button>
+</header>
 
 <section id="lock" class="screen" hidden>
   <form id="lock-form" class="panel">
@@ -24,7 +31,8 @@
 
 <section id="form" class="screen" hidden>
   <form id="kp-form" class="panel" autocomplete="off">
-    <h1>Новое КП</h1>
+    <h1 id="form-title">Новое КП</h1>
+    <p id="form-edit" class="edit-note" hidden><span id="form-edit-text"></span> <button type="button" id="b-new" class="linklike">Начать новое КП</button></p>
     <label class="field"><span>Что за помещение</span><input id="f-object" type="text" placeholder="Склад готовой продукции" required maxlength="60"></label>
     <label class="field"><span>Компания или объект</span><input id="f-company" type="text" placeholder="ТОО «Ромашка» (можно пусто)" maxlength="60"></label>
     <div class="row">
@@ -56,17 +64,36 @@
 <section id="result" class="screen" hidden>
   <div class="panel panel--bar">
     <div class="bar-title" id="r-title"></div>
-    <div class="actions">
-      <button type="button" id="b-download" class="primary">Скачать PDF</button>
-      <button type="button" id="b-share" class="primary" hidden>Отправить в WhatsApp</button>
-      <button type="button" id="b-copy">Текст сообщения</button>
-      <button type="button" id="b-edit">Изменить</button>
+    <div id="act-make" class="actions">
+      <button type="button" id="b-pdf" class="primary">Получить PDF</button>
     </div>
-    <p id="status" class="status"></p>
+    <div id="act-ready" class="actions" hidden>
+      <div id="linkbox" class="linkbox" hidden><span class="linkbox__label">Ссылка на PDF</span><a id="pdf-link" href="#" target="_blank" rel="noopener"></a><button type="button" id="b-link-copy">Копировать</button></div>
+      <button type="button" id="b-chief" class="primary">Отправить руководителю</button>
+      <button type="button" id="b-share" hidden>Поделиться файлом</button>
+      <a id="b-download" class="btn-a" href="#" download>Скачать PDF</a>
+      <button type="button" id="b-retry" class="wide" hidden>Сохранить в историю ещё раз</button>
+    </div>
+    <div class="actions actions--minor">
+      <button type="button" id="b-edit">Изменить</button>
+      <button type="button" id="b-copy">Текст для клиента</button>
+    </div>
+    <p id="status" class="status" role="status"></p>
+    <p id="dl-hint" class="hint hint--small" hidden>Если вместо файла открылась ссылка вида blob:, нажмите «Поделиться файлом» или откройте ссылку на PDF.</p>
     <textarea id="wa-text" class="wa-text" rows="5" readonly hidden></textarea>
   </div>
   <div class="preview"><div id="pages" class="pages"></div></div>
   <div id="a4" class="a4-holder" aria-hidden="true"></div>
+</section>
+
+<section id="history" class="screen" hidden>
+  <div class="panel">
+    <div class="h-head"><h1>История КП</h1><button type="button" id="b-h-refresh" class="small-btn">Обновить</button></div>
+    <p id="h-note" class="hint"></p>
+    <input id="h-search" class="search" type="search" placeholder="Номер, объект, город, менеджер" autocomplete="off">
+    <p id="h-status" class="status" role="status"></p>
+    <div id="h-list" class="h-list"></div>
+  </div>
 </section>
 
 <script src="vendor/html2canvas.min.js"></script>
